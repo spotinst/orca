@@ -18,7 +18,6 @@ package com.netflix.spinnaker.orca.clouddriver.pipeline.providers.spot
 
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.providers.spot.UpdateElastigroupTask
-import com.netflix.spinnaker.orca.clouddriver.tasks.scalingpolicy.UpsertScalingPolicyTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.ServerGroupCacheForceRefreshTask
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
 import com.netflix.spinnaker.orca.pipeline.TaskNode
@@ -32,8 +31,8 @@ class UpdateElastigroupStage implements StageDefinitionBuilder {
   @Override
   void taskGraph(Stage stage, TaskNode.Builder builder) {
     builder
-        .withTask("updateElastigroupTask", UpdateElastigroupTask.class)
-//        .withTask("monitorUpdateElastigroup", MonitorKatoTask.class)
-//        .withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask.class)
+        .withTask("updateElastigroupTask", UpdateElastigroupTask)
+        .withTask("monitorUpdateElastigroup", MonitorKatoTask)
+        .withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask)
   }
 }

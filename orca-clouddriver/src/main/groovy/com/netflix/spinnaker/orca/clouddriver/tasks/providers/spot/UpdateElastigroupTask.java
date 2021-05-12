@@ -23,9 +23,7 @@ import com.netflix.spinnaker.orca.clouddriver.KatoService;
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId;
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask;
 import com.netflix.spinnaker.orca.pipeline.model.Stage;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
 import javax.annotation.Nonnull;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -55,10 +53,14 @@ public class UpdateElastigroupTask extends AbstractCloudProviderAwareTask implem
             .first();
 
     Map<String, Object> outputs = new HashMap<>();
-    outputs.put("notification.type", TASK_NAME);
-    outputs.put("kato.result.expected", true);
+
+    outputs.put("deploy.account.name", credentials);
     outputs.put("kato.last.task.id", taskId);
-    outputs.put("updateElastigroup.account.name", credentials);
+    Map<String, Set<String>> serverGroupsByRegion = new HashMap<>();
+    serverGroupsByRegion.put(
+        task.get("region").toString(),
+        new HashSet<>(Collections.singleton(task.get("serverGroupName").toString())));
+    outputs.put("deploy.server.groups", serverGroupsByRegion);
 
     return TaskResult.builder(ExecutionStatus.SUCCEEDED).context(outputs).build();
   }
