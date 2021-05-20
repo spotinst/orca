@@ -19,8 +19,8 @@ package com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.support
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.frigga.Names
 import com.netflix.spinnaker.moniker.Moniker
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.kato.pipeline.support.StageData
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import groovy.transform.InheritConstructors
 import groovy.transform.ToString
 import groovy.util.logging.Slf4j
@@ -48,6 +48,11 @@ class TargetServerGroup {
     serverGroup = new HashMap(serverGroupData).asImmutable()
   }
 
+  Collection<String> getSuspendedProcesses() {
+    def asgDetails = serverGroup.asg as Map
+    return asgDetails.suspendedProcesses*.processName
+  }
+
   /**
    * All invocations of this method should use the full 'getLocation()' signature, instead of the shorthand dot way
    * (i.e. "serverGroup.location"). Otherwise, the property 'location' is looked for in the serverGroup map, which is
@@ -62,6 +67,17 @@ class TargetServerGroup {
    */
   String getName() {
     return serverGroup.name
+  }
+
+  Capacity getCapacity() {
+    return new Capacity(
+        toInt(serverGroup.capacity.min),
+        toInt(serverGroup.capacity.max),
+        toInt(serverGroup.capacity.desired))
+  }
+
+  private static int toInt(Object field) {
+    Integer.parseInt(field.toString())
   }
 
   /**
@@ -176,7 +192,7 @@ class TargetServerGroup {
     }
   }
 
-  static boolean isDynamicallyBound(Stage stage) {
+  static boolean isDynamicallyBound(StageExecution stage) {
     Params.fromStage(stage).target?.isDynamic()
   }
 
@@ -240,7 +256,7 @@ class TargetServerGroup {
       moniker?.cluster ?: cluster ?: Names.parseName(serverGroupName)?.cluster
     }
 
-    static Params fromStage(Stage stage) {
+    static Params fromStage(StageExecution stage) {
       Params p = stage.mapTo(Params)
 
       if (stage.context.region) {

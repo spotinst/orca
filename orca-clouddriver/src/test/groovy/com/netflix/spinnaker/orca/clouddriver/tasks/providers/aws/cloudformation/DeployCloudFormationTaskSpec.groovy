@@ -20,12 +20,11 @@ import com.netflix.spinnaker.kork.artifacts.model.Artifact
 import com.netflix.spinnaker.orca.clouddriver.KatoService
 import com.netflix.spinnaker.orca.clouddriver.OortService
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils
 import retrofit.client.Response
 import retrofit.mime.TypedString
-import rx.Observable
 import spock.lang.Specification
 import spock.lang.Subject
 import spock.lang.Unroll
@@ -43,14 +42,14 @@ class DeployCloudFormationTaskSpec extends Specification {
   def "should put kato task information as output"() {
     given:
     def taskId = new TaskId(id: 'id')
-    def pipeline = Execution.newPipeline('orca')
+    def pipeline = PipelineExecutionImpl.newPipeline('orca')
     def context = [
       credentials: 'creds',
       cloudProvider: 'aws',
       source: 'text',
       regions: ['eu-west-1'],
       templateBody: [key: 'value']]
-    def stage = new Stage(pipeline, 'test', 'test', context)
+    def stage = new StageExecutionImpl(pipeline, 'test', 'test', context)
 
     when:
     def result = deployCloudFormationTask.execute(stage)
@@ -58,7 +57,7 @@ class DeployCloudFormationTaskSpec extends Specification {
     then:
     1 * katoService.requestOperations("aws", {
       it.get(0).get("deployCloudFormation").get("templateBody").trim() == '{key: value}'
-    }) >> Observable.just(taskId)
+    }) >> taskId
     result.context.'kato.result.expected' == true
     result.context.'kato.last.task.id' == taskId
   }
@@ -66,14 +65,14 @@ class DeployCloudFormationTaskSpec extends Specification {
   def "should put kato task information as output when templateBody is a string"() {
     given:
     def taskId = new TaskId(id: 'id')
-    def pipeline = Execution.newPipeline('orca')
+    def pipeline = PipelineExecutionImpl.newPipeline('orca')
     def context = [
       credentials: 'creds',
       cloudProvider: 'aws',
       source: 'text',
       regions: ['eu-west-1'],
       templateBody: 'key: "value"']
-    def stage = new Stage(pipeline, 'test', 'test', context)
+    def stage = new StageExecutionImpl(pipeline, 'test', 'test', context)
 
     when:
     def result = deployCloudFormationTask.execute(stage)
@@ -81,7 +80,7 @@ class DeployCloudFormationTaskSpec extends Specification {
     then:
     1 * katoService.requestOperations("aws", {
       it.get(0).get("deployCloudFormation").get("templateBody").trim() == 'key: "value"'
-    }) >> Observable.just(taskId)
+    }) >> taskId
     result.context.'kato.result.expected' == true
     result.context.'kato.last.task.id' == taskId
   }
@@ -89,7 +88,7 @@ class DeployCloudFormationTaskSpec extends Specification {
   @Unroll
   def "should fail if context is invalid"() {
     given:
-    def pipeline = Execution.newPipeline('orca')
+    def pipeline = PipelineExecutionImpl.newPipeline('orca')
     def template = new TypedString('{ "key": "value" }')
     def context = [
       credentials: 'creds',
@@ -100,7 +99,7 @@ class DeployCloudFormationTaskSpec extends Specification {
       templateBody: templateBody,
       regions: regions
     ]
-    def stage = new Stage(pipeline, 'test', 'test', context)
+    def stage = new StageExecutionImpl(pipeline, 'test', 'test', context)
 
     when:
     def result = deployCloudFormationTask.execute(stage)
@@ -125,7 +124,7 @@ class DeployCloudFormationTaskSpec extends Specification {
   def "should fetch artifact if specified, and add it as a templateBody"() {
     given:
     def taskId = new TaskId(id: 'id')
-    def pipeline = Execution.newPipeline('orca')
+    def pipeline = PipelineExecutionImpl.newPipeline('orca')
     def context = [
       credentials: 'creds',
       cloudProvider: 'aws',
@@ -135,7 +134,7 @@ class DeployCloudFormationTaskSpec extends Specification {
       stackArtifactAccount: stackArtifactAccount,
       regions: ['eu-west-1'],
       templateBody: [key: 'value']]
-    def stage = new Stage(pipeline, 'test', 'test', context)
+    def stage = new StageExecutionImpl(pipeline, 'test', 'test', context)
 
     when:
     def result = deployCloudFormationTask.execute(stage)
@@ -145,7 +144,7 @@ class DeployCloudFormationTaskSpec extends Specification {
     1 * oortService.fetchArtifact(_) >> new Response("url", 200, "reason", Collections.emptyList(), new TypedString(template))
     1 * katoService.requestOperations("aws", {
       it.get(0).get("deployCloudFormation").containsKey("templateBody")
-    }) >> Observable.just(taskId)
+    }) >> taskId
     result.context.'kato.result.expected' == true
     result.context.'kato.last.task.id' == taskId
 

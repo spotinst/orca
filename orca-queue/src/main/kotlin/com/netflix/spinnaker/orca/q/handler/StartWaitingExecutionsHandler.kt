@@ -48,7 +48,11 @@ class StartWaitingExecutionsHandler(
             when (purgedMessage) {
               is StartExecution -> {
                 log.info("Dropping queued pipeline {} {}", purgedMessage.application, purgedMessage.executionId)
-                queue.push(CancelExecution(purgedMessage))
+                queue.push(CancelExecution(
+                  source = purgedMessage,
+                  user = "spinnaker",
+                  reason = "This execution was queued but then canceled because a newer queued execution superceded it. This pipeline is configured to automatically cancel waiting executions." 
+                ))
               }
               is RestartStage -> {
                 log.info("Cancelling restart of {} {}", purgedMessage.application, purgedMessage.executionId)

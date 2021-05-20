@@ -1,22 +1,26 @@
 package com.netflix.spinnaker.orca.clouddriver.tasks.cluster
 
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.ServerGroupCreator
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.WaitForRequiredInstancesDownTask
 import com.netflix.spinnaker.orca.clouddriver.utils.OortHelper
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
+import org.springframework.core.env.Environment
 import spock.lang.Shared
 import spock.lang.Specification
 import spock.lang.Subject
 import spock.lang.Unroll
 
-import static com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import static com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
 import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.stage
 
 class WaitForClusterDisableTaskSpec extends Specification {
   def oortHelper = Mock(OortHelper)
+  def environment = Mock(Environment) {
+    getProperty(WaitForClusterDisableTask.TOGGLE, Boolean, false) >> true
+  }
 
   @Shared def region = "region"
   @Shared def clusterName = "clusterName"
@@ -28,10 +32,13 @@ class WaitForClusterDisableTaskSpec extends Specification {
     getOperations(_) >> [["aOp": "foo"]]
   }
 
-  @Subject def task = new WaitForClusterDisableTask([serverGroupCreator])
+  @Subject WaitForClusterDisableTask task = new WaitForClusterDisableTask([serverGroupCreator]).with {
+    environment = this.environment
+    return it
+  }
 
   @Unroll
-  def "status=#status when oldSGDisabled=#oldSGDisabled, desiredPercentage=#desiredPct, interestingHealthProviderNames=#interestingHealthProviderNames"() {
+  def "status=#status when desiredPercentage=#desiredPct, interestingHealthProviderNames=#interestingHealthProviderNames"() {
     given:
     def stage = stage {
       context = [
@@ -53,7 +60,7 @@ class WaitForClusterDisableTaskSpec extends Specification {
         serverGroup("$clusterName-v051".toString(), "us-west-1", [:]),
         serverGroup("$clusterName-$newServerGroup".toString(), region, [:]),
         serverGroup("$clusterName-$oldServerGroup".toString(), region, [
-          disabled: oldSGDisabled,
+          disabled: disabled,
           capacity: [desired: desired],
           instances: [
             instance('i-1', platformHealthState, extraHealths),
@@ -75,35 +82,37 @@ class WaitForClusterDisableTaskSpec extends Specification {
     result.getStatus() == status
 
     where:
-    dsgregion | minWaitTime | oldSGDisabled | desired | desiredPct | interestingHealthProviderNames | extraHealths              | platformHealthState || status
-    "other"   | 0           | false         | 3       | null       | ['platformHealthType']         | []                        | 'Unknown'           || SUCCEEDED  // exercises if (!remainingDeployServerGroups)...
-    "other"   | 90          | false         | 3       | null       | ['platformHealthType']         | []                        | 'Unknown'           || RUNNING    // keeps running if duration < minWaitTime
+    dsgregion | minWaitTime | disabled | desired | desiredPct | interestingHealthProviderNames | extraHealths                  | platformHealthState || status
+    "other"   | 0           | false    | 3       | null       | ['platformHealthType']         | []                            | 'Unknown'           || SUCCEEDED  // exercises if (!remainingDeployServerGroups)...
+    "other"   | 90          | false    | 3       | null       | ['platformHealthType']         | []                            | 'Unknown'           || RUNNING    // keeps running if duration < minWaitTime
+    region    | 0           | false    | 3       | null       | null                           | []                            | 'Unknown'           || RUNNING    // keeps running if disabled is false
 
     // tests for isDisabled==true
-    region    | 0           | true          | 3       | null       | ['platformHealthType']         | []                        | 'Unknown'           || SUCCEEDED
-    region    | 0           | true          | 3       | null       | ['platformHealthType']         | []                        | 'NotUnknown'        || RUNNING    // wait for instances down even if cluster is disabled
-    region    | 0           | true          | 3       | 100        | ['platformHealthType']         | []                        | 'NotUnknown'        || RUNNING    // also wait for instances down with a desiredPct
-    region    | 0           | true          | 4       | 50         | ['platformHealthType']         | []                        | 'Unknown'           || SUCCEEDED
-    region    | 0           | true          | 3       | null       | ['strangeType']                | []                        | 'Unknown'           || SUCCEEDED  // intersection of interesting and provided healths is empty, so we're done
-    region    | 0           | true          | 3       | null       | ['strangeType']                | health('strange', 'Down') | 'Unknown'           || SUCCEEDED  // also done if we provide it and are down...
-    region    | 0           | true          | 3       | null       | ['strangeType']                | health('strange', 'Up')   | 'Unknown'           || RUNNING    // ...but not if that extra health is up
+    region    | 0           | true     | 3       | null       | ['platformHealthType']         | []                            | 'Unknown'           || SUCCEEDED
+    region    | 0           | true     | 3       | null       | ['platformHealthType']         | []                            | 'NotUnknown'        || RUNNING    // wait for instances down even if cluster is disabled
+    region    | 0           | true     | 3       | 100        | ['platformHealthType']         | []                            | 'NotUnknown'        || RUNNING    // also wait for instances down with a desiredPct
+    region    | 0           | true     | 4       | 50         | ['platformHealthType']         | []                            | 'Unknown'           || SUCCEEDED
+    region    | 0           | true     | 3       | null       | ['strangeType']                | []                            | 'Unknown'           || SUCCEEDED  // intersection of interesting and provided healths is empty, so we're done
+    region    | 0           | true     | 3       | null       | ['strangeType']                | health('strange', 'Down')     | 'Unknown'           || SUCCEEDED  // also done if we provide it and are down...
+    region    | 0           | true     | 3       | null       | ['strangeType']                | health('strange', 'Up')       | 'Unknown'           || RUNNING    // ...but not if that extra health is up
 
-    // tests for isDisabled==false, no desiredPct
-    region    | 0           | false         | 3       | null       | []                             | []                        | 'Unknown'           || SUCCEEDED  // no health providers to check so short-circuits early
-    region    | 0           | false         | 3       | null       | null                           | []                        | 'Unknown'           || RUNNING    // exercises null vs empty behavior of interestingHealthProviderNames
-    region    | 0           | false         | 3       | null       | ['platformHealthType']         | []                        | 'Unknown'           || SUCCEEDED  // considered complete because only considers the platform health
-    region    | 0           | false         | 3       | null       | ['platformHealthType']         | []                        | 'Up'                || SUCCEEDED  // considered complete because only considers the platform health, despite platform health being Up
-    region    | 0           | false         | 3       | null       | ['strangeType']                | []                        | 'Unknown'           || RUNNING    // can't complete if we need to monitor an unknown health provider...
-    region    | 0           | false         | 3       | null       | ['strangeType']                | health('strange', 'Down') | 'Unknown'           || RUNNING    // ...regardless of down status
+    // tests for no desiredPct
+    region    | 0           | true     | 3       | null       | []                             | []                            | 'Unknown'           || SUCCEEDED  // no health providers to check so short-circuits early
+    region    | 0           | true     | 3       | null       | null                           | []                            | 'Unknown'           || SUCCEEDED  // exercises null vs empty behavior of interestingHealthProviderNames
+    region    | 0           | true     | 3       | null       | ['platformHealthType']         | []                            | 'Unknown'           || SUCCEEDED  // considered complete because only considers the platform health
+    region    | 0           | true     | 3       | null       | ['platformHealthType']         | health('eureka', 'Up')        | 'Unknown'           || SUCCEEDED  // up health is filtered out so we're done
+    region    | 0           | true     | 3       | null       | ['strangeType']                | []                            | 'Unknown'           || SUCCEEDED  // missing health is filtered out so we're done
+    region    | 0           | true     | 3       | null       | ['strangeType']                | health('strange', 'Down')     | 'Unknown'           || SUCCEEDED  // extra health is down so we're done
 
-    // tests for waitForRequiredInstancesDownTask.hasSucceeded
-    region    | 0           | false         | 3       | 100        | null                           | []                        | 'Unknown'           || SUCCEEDED  // no other health providers than platform, and it looks down
-    region    | 0           | false         | 3       | 100        | null                           | []                        | 'NotUnknown'        || RUNNING    // no other health providers than platform, and it looks NOT down
-    region    | 0           | false         | 4       | 100        | ['platformHealthType']         | []                        | 'Unknown'           || RUNNING    // can't reach count(someAreDownAndNoneAreUp) >= targetDesiredSize
-    region    | 0           | false         | 4       | 50         | ['platformHealthType']         | []                        | 'Unknown'           || SUCCEEDED  // all look down, and we want at least 2 down so we're done
-    region    | 0           | false         | 3       | 100        | ['strangeType']                | []                        | 'Unknown'           || SUCCEEDED  // intersection of interesting and provided healths is empty, so we're done
-    region    | 0           | false         | 3       | 100        | ['strangeType']                | health('strange', 'Down') | 'Unknown'           || SUCCEEDED  // ...unless we have data for that health provider
-    region    | 0           | false         | 3       | 100        | ['strangeType']                | health('strange', 'Up')   | 'Unknown'           || RUNNING    // ...unless we have data for that health provider
+    // tests with desiredPct
+    region    | 0           | true     | 3       | 100        | null                           | []                            | 'Unknown'           || SUCCEEDED  // no other health providers than platform
+    region    | 0           | true     | 3       | 100        | null                           | []                            | 'NotUnknown'        || RUNNING    // no other health providers than platform
+    region    | 0           | true     | 4       | 100        | ['platformHealthType']         | []                            | 'Unknown'           || RUNNING    // can't reach count(someAreDownAndNoneAreUp) >= targetDesiredSize
+    region    | 0           | true     | 4       | 50         | ['platformHealthType']         | []                            | 'Unknown'           || SUCCEEDED  // all look down, and we want at least 2 down so we're done
+    region    | 0           | true     | 3       | 100        | ['strangeType']                | []                            | 'Unknown'           || SUCCEEDED  // intersection of interesting and provided healths is empty, so we're done
+    region    | 0           | true     | 3       | 100        | ['strangeType']                | health('strange', 'Down')     | 'Unknown'           || SUCCEEDED  // extra health is down so we're done
+    region    | 0           | true     | 3       | 100        | ['strangeType']                | health('strange', 'Up')       | 'Unknown'           || RUNNING    // extra health is up so we're not done
+    region    | 0           | true     | 3       | 100        | ['strangeType']                | health('strange', 'Starting') | 'Unknown'           || SUCCEEDED  // Starting is considered down
 
     oldServerGroup = "v167"
     newServerGroup = "v168"
@@ -112,7 +121,7 @@ class WaitForClusterDisableTaskSpec extends Specification {
   @Unroll
   def "fails with '#message' when clusterData=#clusterData"() {
     given:
-    def stage = new Stage(Execution.newPipeline("orca"), "test", [
+    def stage = new StageExecutionImpl(PipelineExecutionImpl.newPipeline("orca"), "test", [
       cluster: clusterName,
       credentials: 'test',
       "deploy.server.groups": [

@@ -19,21 +19,27 @@ package com.netflix.spinnaker.orca.q.handler
 import com.netflix.spectator.api.BasicTag
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.PAUSED
-import com.netflix.spinnaker.orca.ExecutionStatus.REDIRECT
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.STOPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.OverridableTimeoutRetryableTask
-import com.netflix.spinnaker.orca.RetryableTask
-import com.netflix.spinnaker.orca.Task
+import com.netflix.spinnaker.kork.exceptions.UserException
 import com.netflix.spinnaker.orca.TaskExecutionInterceptor
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.TaskResolver
+import com.netflix.spinnaker.orca.api.pipeline.OverridableTimeoutRetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.RetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.Task
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.PAUSED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.REDIRECT
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.TaskExecution
 import com.netflix.spinnaker.orca.clouddriver.utils.CloudProviderAware
 import com.netflix.spinnaker.orca.exceptions.ExceptionHandler
 import com.netflix.spinnaker.orca.exceptions.TimeoutException
@@ -42,9 +48,6 @@ import com.netflix.spinnaker.orca.ext.failureStatus
 import com.netflix.spinnaker.orca.ext.isManuallySkipped
 import com.netflix.spinnaker.orca.pipeline.RestrictExecutionDuringTimeWindow
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.pipeline.util.StageNavigator
@@ -57,9 +60,6 @@ import com.netflix.spinnaker.orca.time.toDuration
 import com.netflix.spinnaker.orca.time.toInstant
 import com.netflix.spinnaker.q.Message
 import com.netflix.spinnaker.q.Queue
-import org.apache.commons.lang3.time.DurationFormatUtils
-import org.slf4j.MDC
-import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.Duration
 import java.time.Duration.ZERO
@@ -67,6 +67,9 @@ import java.time.Instant
 import java.time.temporal.TemporalAmount
 import java.util.concurrent.TimeUnit
 import kotlin.collections.set
+import org.apache.commons.lang3.time.DurationFormatUtils
+import org.slf4j.MDC
+import org.springframework.stereotype.Component
 
 @Component
 class RunTaskHandler(
@@ -75,7 +78,7 @@ class RunTaskHandler(
   override val stageNavigator: StageNavigator,
   override val stageDefinitionBuilderFactory: StageDefinitionBuilderFactory,
   override val contextParameterProcessor: ContextParameterProcessor,
-  private val tasks: Collection<Task>,
+  private val taskResolver: TaskResolver,
   private val clock: Clock,
   private val exceptionHandlers: List<ExceptionHandler>,
   private val taskExecutionInterceptors: List<TaskExecutionInterceptor>,
@@ -83,48 +86,60 @@ class RunTaskHandler(
   private val dynamicConfigService: DynamicConfigService
 ) : OrcaMessageHandler<RunTask>, ExpressionAware, AuthenticationAware {
 
+  /**
+   *  If a task takes longer than this number of ms to run, we will print a warning.
+   *  This is an indication that the task might eventually hit the dreaded message ack timeout and might end
+   *  running multiple times cause unintended side-effects.
+   */
+  private val warningInvocationTimeMs: Int = dynamicConfigService.getConfig(
+    Int::class.java,
+    "tasks.warningInvocationTimeMs",
+    30000
+  )
+
   override fun handle(message: RunTask) {
     message.withTask { origStage, taskModel, task ->
       var stage = origStage
 
-      val thisInvocationStartTimeMs = clock.millis()
-      val execution = stage.execution
-      var taskResult: TaskResult? = null
+      stage.withAuth {
+        stage.withLoggingContext(taskModel) {
+          val thisInvocationStartTimeMs = clock.millis()
+          val execution = stage.execution
+          var taskResult: TaskResult? = null
 
-      try {
-        taskExecutionInterceptors.forEach { t -> stage = t.beforeTaskExecution(task, stage) }
-
-        if (execution.isCanceled) {
-          task.onCancel(stage)
-          queue.push(CompleteTask(message, CANCELED))
-        } else if (execution.status.isComplete) {
-          queue.push(CompleteTask(message, CANCELED))
-        } else if (execution.status == PAUSED) {
-          queue.push(PauseTask(message))
-        } else if (stage.isManuallySkipped()) {
-          queue.push(CompleteTask(message, SKIPPED))
-        } else {
+          var taskException: Exception? = null
           try {
-            task.checkForTimeout(stage, taskModel, message)
-          } catch (e: TimeoutException) {
-            registry
-              .timeoutCounter(stage.execution.type, stage.execution.application, stage.type, taskModel.name)
-              .increment()
-            taskResult = task.onTimeout(stage)
+            taskExecutionInterceptors.forEach { t -> stage = t.beforeTaskExecution(task, stage) }
 
-            if (taskResult == null) {
-              // This means this task doesn't care to alter the timeout flow, just throw
-              throw e
-            }
+            if (execution.isCanceled) {
+              task.onCancel(stage)
+              queue.push(CompleteTask(message, CANCELED))
+            } else if (execution.status.isComplete) {
+              queue.push(CompleteTask(message, CANCELED))
+            } else if (execution.status == PAUSED) {
+              queue.push(PauseTask(message))
+            } else if (stage.isManuallySkipped()) {
+              queue.push(CompleteTask(message, SKIPPED))
+            } else {
+              try {
+                task.checkForTimeout(stage, taskModel, message)
+              } catch (e: TimeoutException) {
+                registry
+                  .timeoutCounter(stage.execution.type, stage.execution.application, stage.type, taskModel.name)
+                  .increment()
+                taskResult = task.onTimeout(stage)
 
-            if (!setOf(TERMINAL, FAILED_CONTINUE).contains(taskResult.status)) {
-              log.error("Task ${task.javaClass.name} returned invalid status (${taskResult.status}) for onTimeout")
-              throw e
-            }
-          }
+                if (taskResult == null) {
+                  // This means this task doesn't care to alter the timeout flow, just throw
+                  throw e
+                }
 
-          stage.withAuth {
-            stage.withLoggingContext(taskModel) {
+                if (!setOf(TERMINAL, FAILED_CONTINUE).contains(taskResult.status)) {
+                  log.error("Task ${task.javaClass.name} returned invalid status (${taskResult.status}) for onTimeout")
+                  throw e
+                }
+              }
+
               if (taskResult == null) {
                 taskResult = task.execute(stage.withMergedContext())
                 taskExecutionInterceptors.forEach { t -> taskResult = t.afterTaskExecution(task, stage, taskResult) }
@@ -158,59 +173,82 @@ class RunTaskHandler(
                 }
               }
             }
+          } catch (e: Exception) {
+            taskException = e;
+            val exceptionDetails = exceptionHandlers.shouldRetry(e, taskModel.name)
+            if (exceptionDetails?.shouldRetry == true) {
+              log.warn("Error running ${message.taskType.simpleName} for ${message.executionType}[${message.executionId}]")
+              queue.push(message, task.backoffPeriod(taskModel, stage))
+              trackResult(stage, thisInvocationStartTimeMs, taskModel, RUNNING)
+            } else if (e is TimeoutException && stage.context["markSuccessfulOnTimeout"] == true) {
+              trackResult(stage, thisInvocationStartTimeMs, taskModel, SUCCEEDED)
+              queue.push(CompleteTask(message, SUCCEEDED))
+            } else {
+              if (e !is TimeoutException) {
+                if (e is UserException) {
+                  log.warn("${message.taskType.simpleName} for ${message.executionType}[${message.executionId}] failed, likely due to user error", e)
+                } else {
+                  log.error("Error running ${message.taskType.simpleName} for ${message.executionType}[${message.executionId}]", e)
+                }
+              }
+              val status = stage.failureStatus(default = TERMINAL)
+              stage.context["exception"] = exceptionDetails
+              repository.storeStage(stage)
+              queue.push(CompleteTask(message, status, TERMINAL))
+              trackResult(stage, thisInvocationStartTimeMs, taskModel, status)
+            }
+          } finally {
+            taskExecutionInterceptors.forEach { t -> t.finallyAfterTaskExecution(task, stage, taskResult, taskException) }
           }
-        }
-      } catch (e: Exception) {
-        val exceptionDetails = exceptionHandlers.shouldRetry(e, taskModel.name)
-        if (exceptionDetails?.shouldRetry == true) {
-          log.warn("Error running ${message.taskType.simpleName} for ${message.executionType}[${message.executionId}]")
-          queue.push(message, task.backoffPeriod(taskModel, stage))
-          trackResult(stage, thisInvocationStartTimeMs, taskModel, RUNNING)
-        } else if (e is TimeoutException && stage.context["markSuccessfulOnTimeout"] == true) {
-          queue.push(CompleteTask(message, SUCCEEDED))
-        } else {
-          log.error("Error running ${message.taskType.simpleName} for ${message.executionType}[${message.executionId}]", e)
-          val status = stage.failureStatus(default = TERMINAL)
-          stage.context["exception"] = exceptionDetails
-          repository.storeStage(stage)
-          queue.push(CompleteTask(message, status, TERMINAL))
-          trackResult(stage, thisInvocationStartTimeMs, taskModel, status)
         }
       }
     }
   }
 
-  private fun trackResult(stage: Stage, thisInvocationStartTimeMs: Long, taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, status: ExecutionStatus) {
-    val commonTags = MetricsTagHelper.commonTags(stage, taskModel, status)
-    val detailedTags = MetricsTagHelper.detailedTaskTags(stage, taskModel, status)
+  private fun trackResult(stage: StageExecution, thisInvocationStartTimeMs: Long, taskModel: TaskExecution, status: ExecutionStatus) {
+    try {
+      val commonTags = MetricsTagHelper.commonTags(stage, taskModel, status)
+      val detailedTags = MetricsTagHelper.detailedTaskTags(stage, taskModel, status)
 
-    val elapsedMillis = clock.millis() - thisInvocationStartTimeMs
+      val elapsedMillis = clock.millis() - thisInvocationStartTimeMs
 
-    hashMapOf(
-      "task.invocations.duration" to commonTags + BasicTag("application", stage.execution.application),
-      "task.invocations.duration.withType" to commonTags + detailedTags
-    ).forEach {
-      name, tags ->
+      hashMapOf(
+        "task.invocations.duration" to commonTags + BasicTag("application", stage.execution.application),
+        "task.invocations.duration.withType" to commonTags + detailedTags
+      ).forEach { name, tags ->
         registry.timer(name, tags).record(elapsedMillis, TimeUnit.MILLISECONDS)
+      }
+
+      if (elapsedMillis >= warningInvocationTimeMs) {
+        log.info(
+          "Task invocation took over ${warningInvocationTimeMs}ms " +
+            "(taskType: ${taskModel.implementingClass}, stageType: ${stage.type}, stageId: ${stage.id})"
+        )
+      }
+    } catch (e: java.lang.Exception) {
+      log.warn("Failed to track result for stage: ${stage.id}, task: ${taskModel.id}", e)
     }
   }
 
   override val messageType = RunTask::class.java
 
-  private fun RunTask.withTask(block: (Stage, com.netflix.spinnaker.orca.pipeline.model.Task, Task) -> Unit) =
+  private fun RunTask.withTask(block: (StageExecution, TaskExecution, Task) -> Unit) =
     withTask { stage, taskModel ->
-      tasks
-        .find { taskType.isAssignableFrom(it.javaClass) }
-        .let { task ->
-          if (task == null) {
-            queue.push(InvalidTaskType(this, taskType.name))
-          } else {
-            block.invoke(stage, taskModel, task)
-          }
+      try {
+        taskResolver.getTask(taskModel.implementingClass)
+      } catch (e: TaskResolver.NoSuchTaskException) {
+        try {
+          taskResolver.getTask(taskType)
+        } catch (e: TaskResolver.NoSuchTaskException) {
+          queue.push(InvalidTaskType(this, taskType.name))
+          null
         }
+      }?.let {
+        block.invoke(stage, taskModel, it)
+      }
     }
 
-  private fun Task.backoffPeriod(taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, stage: Stage): TemporalAmount =
+  private fun Task.backoffPeriod(taskModel: TaskExecution, stage: StageExecution): TemporalAmount =
     when (this) {
       is RetryableTask -> Duration.ofMillis(
         retryableBackOffPeriod(taskModel, stage).coerceAtMost(taskExecutionInterceptors.maxBackoff())
@@ -226,8 +264,8 @@ class RunTaskHandler(
    * `tasks.aws.backoffPeriod` will be used (given the criteria matches and unless the default dynamicBackOffPeriod is greater).
    */
   private fun RetryableTask.retryableBackOffPeriod(
-    taskModel: com.netflix.spinnaker.orca.pipeline.model.Task,
-    stage: Stage
+    taskModel: TaskExecution,
+    stage: StageExecution
   ): Long {
     val dynamicBackOffPeriod = getDynamicBackoffPeriod(
       stage, Duration.ofMillis(System.currentTimeMillis() - (taskModel.startTime ?: 0))
@@ -237,7 +275,8 @@ class RunTaskHandler(
       dynamicConfigService.getConfig(
         Long::class.java,
         "tasks.global.backOffPeriod",
-        dynamicBackOffPeriod)
+        dynamicBackOffPeriod
+      )
     )
 
     if (this is CloudProviderAware && hasCloudProvider(stage)) {
@@ -271,7 +310,7 @@ class RunTaskHandler(
     return DurationFormatUtils.formatDurationWords(timeout, true, true)
   }
 
-  private fun Task.checkForTimeout(stage: Stage, taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, message: Message) {
+  private fun Task.checkForTimeout(stage: StageExecution, taskModel: TaskExecution, message: Message) {
     if (stage.type == RestrictExecutionDuringTimeWindow.TYPE) {
       return
     } else {
@@ -280,7 +319,7 @@ class RunTaskHandler(
     }
   }
 
-  private fun Task.checkForTaskTimeout(taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, stage: Stage, message: Message) {
+  private fun Task.checkForTaskTimeout(taskModel: TaskExecution, stage: StageExecution, message: Message) {
     if (this is RetryableTask) {
       val startTime = taskModel.startTime.toInstant()
       if (startTime != null) {
@@ -299,14 +338,14 @@ class RunTaskHandler(
           msg.append("elapsedTime: ${formatTimeout(elapsedTime.toMillis())}, ")
           msg.append("timeoutValue: ${formatTimeout(actualTimeout.toMillis())}")
 
-          log.warn(msg.toString())
+          log.info(msg.toString())
           throw TimeoutException(msg.toString())
         }
       }
     }
   }
 
-  private fun checkForStageTimeout(stage: Stage) {
+  private fun checkForStageTimeout(stage: StageExecution) {
     stage.parentWithTimeout.ifPresent {
       val startTime = it.startTime.toInstant()
       if (startTime != null) {
@@ -321,11 +360,11 @@ class RunTaskHandler(
     }
   }
 
-  private val Stage.executionWindow: Stage?
+  private val StageExecution.executionWindow: StageExecution?
     get() = beforeStages()
       .firstOrNull { it.type == RestrictExecutionDuringTimeWindow.TYPE }
 
-  private val Stage.duration: Duration
+  private val StageExecution.duration: Duration
     get() = run {
       if (startTime == null || endTime == null) {
         throw IllegalStateException("Only valid on completed stages")
@@ -341,15 +380,17 @@ class RunTaskHandler(
   ) =
     counter(
       createId("queue.task.timeouts")
-        .withTags(mapOf(
-          "executionType" to executionType.toString(),
-          "application" to application,
-          "stageType" to stageType,
-          "taskType" to taskType
-        ))
+        .withTags(
+          mapOf(
+            "executionType" to executionType.toString(),
+            "application" to application,
+            "stageType" to stageType,
+            "taskType" to taskType
+          )
+        )
     )
 
-  private fun Execution.pausedDurationRelativeTo(instant: Instant?): Duration {
+  private fun PipelineExecution.pausedDurationRelativeTo(instant: Instant?): Duration {
     val pausedDetails = paused
     return if (pausedDetails != null) {
       if (pausedDetails.pauseTime.toInstant()?.isAfter(instant) == true) {
@@ -358,7 +399,7 @@ class RunTaskHandler(
     } else ZERO
   }
 
-  private fun Stage.processTaskOutput(result: TaskResult) {
+  private fun StageExecution.processTaskOutput(result: TaskResult) {
     val filteredOutputs = result.outputs.filterKeys { it != "stageTimeoutMs" }
     if (result.context.isNotEmpty() || filteredOutputs.isNotEmpty()) {
       context.putAll(result.context)
@@ -367,7 +408,7 @@ class RunTaskHandler(
     }
   }
 
-  private fun Stage.withLoggingContext(taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, block: () -> Unit) {
+  private fun StageExecution.withLoggingContext(taskModel: TaskExecution, block: () -> Unit) {
     try {
       MDC.put("stageType", type)
       MDC.put("taskType", taskModel.implementingClass)

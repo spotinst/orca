@@ -19,16 +19,15 @@ package com.netflix.spinnaker.orca.front50
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.Id
 import com.netflix.spectator.api.Registry
-import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
-import com.netflix.spinnaker.kork.web.exceptions.ValidationException
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
+import com.netflix.spinnaker.orca.exceptions.PipelineTemplateValidationException
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
 import com.netflix.spinnaker.orca.pipeline.ExecutionLauncher
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Trigger
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.security.AuthenticatedRequest
-import com.netflix.spinnaker.security.User
 import groovy.util.logging.Slf4j
 import org.springframework.beans.BeansException
 import org.springframework.beans.factory.annotation.Autowired
@@ -38,7 +37,7 @@ import org.springframework.stereotype.Component
 
 import java.util.concurrent.Callable
 
-import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
 
 @Component
 @Slf4j
@@ -65,23 +64,23 @@ class DependentPipelineStarter implements ApplicationContextAware {
     this.registry = registry
   }
 
-  Execution trigger(Map pipelineConfig,
-                    String user,
-                    Execution parentPipeline,
-                    Map suppliedParameters,
-                    String parentPipelineStageId,
-                    User principal) {
+  PipelineExecution trigger(Map pipelineConfig,
+                            String user,
+                            PipelineExecution parentPipeline,
+                            Map suppliedParameters,
+                            String parentPipelineStageId,
+                            PipelineExecution.AuthenticationDetails authenticationDetails) {
     def json = objectMapper.writeValueAsString(pipelineConfig)
 
     if (pipelineConfig.disabled) {
-      throw new InvalidRequestException("Pipeline '${pipelineConfig.name}' is disabled and cannot be triggered")
+      throw new ConfigurationException("Pipeline '${pipelineConfig.name}' is disabled and cannot be triggered")
     }
 
     log.info('triggering dependent pipeline {}:{}', pipelineConfig.id, json)
 
     pipelineConfig.trigger = [
       type                 : "pipeline",
-      user                 : principal?.username ?: user ?: "[anonymous]",
+      user                 : authenticationDetails?.user ?: user ?: "[anonymous]",
       parentExecution      : parentPipeline,
       parentPipelineStageId: parentPipelineStageId,
       parameters           : [:],
@@ -134,7 +133,7 @@ class DependentPipelineStarter implements ApplicationContextAware {
     }
 
     if (pipelineConfig.errors != null) {
-      throw new ValidationException("Pipeline template is invalid", pipelineConfig.errors as List<Map<String, Object>>)
+      throw new PipelineTemplateValidationException("Pipeline template is invalid", pipelineConfig.errors as List<Map<String, Object>>)
     }
 
     // Process the raw trigger to resolve any expressions before converting it to a Trigger object, which will not be
@@ -153,39 +152,30 @@ class DependentPipelineStarter implements ApplicationContextAware {
     log.info('running pipeline {}:{}', pipelineConfig.id, json)
 
     log.debug("Source thread: MDC user: " + AuthenticatedRequest.getAuthenticationHeaders() +
-      ", principal: " + principal?.toString())
+      ", principal: " + authenticationDetails?.toString())
 
-    def pipeline
-    def callable
+    Callable<PipelineExecution> callable
     if (artifactError == null) {
-      callable = AuthenticatedRequest.propagate({
+      callable = {
         log.debug("Destination thread user: " + AuthenticatedRequest.getAuthenticationHeaders())
-        pipeline = executionLauncher().start(PIPELINE, json)
-
-        Id id = registry.createId("pipelines.triggered")
-          .withTag("application", Optional.ofNullable(pipeline.getApplication()).orElse("null"))
-          .withTag("monitor", "DependentPipelineStarter")
-        registry.counter(id).increment()
-
-      } as Callable<Void>, true, principal)
+        return executionLauncher().start(PIPELINE, json).with {
+          Id id = registry.createId("pipelines.triggered")
+              .withTag("application", Optional.ofNullable(it.getApplication()).orElse("null"))
+              .withTag("monitor", "DependentPipelineStarter")
+          registry.counter(id).increment()
+          return it
+        }
+      } as Callable<PipelineExecution>
     } else {
-      callable = AuthenticatedRequest.propagate({
+      callable = {
         log.debug("Destination thread user: " + AuthenticatedRequest.getAuthenticationHeaders())
-        pipeline = executionLauncher().fail(PIPELINE, json, artifactError)
-      } as Callable<Void>, true, principal)
+        return executionLauncher().fail(PIPELINE, json, artifactError)
+      } as Callable<PipelineExecution>
     }
 
-    //This needs to run in a separate thread to not bork the batch TransactionManager
-    //TODO(rfletcher) - should be safe to kill this off once nu-orca merges down
-    def t1 = Thread.start {
-      callable.call()
-    }
-
-    try {
-      t1.join()
-    } catch (InterruptedException e) {
-      log.warn("Thread interrupted", e)
-    }
+    def pipeline = authenticationDetails?.user ?
+        AuthenticatedRequest.runAs(authenticationDetails.user, authenticationDetails.allowedAccounts, callable).call() :
+        AuthenticatedRequest.propagate(callable).call()
 
     log.info('executing dependent pipeline {}', pipeline.id)
     return pipeline

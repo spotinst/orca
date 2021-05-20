@@ -17,18 +17,18 @@
 package com.netflix.spinnaker.orca.q.handler
 
 import com.netflix.spectator.api.NoopRegistry
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.STOPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.events.ExecutionComplete
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CancelStage
 import com.netflix.spinnaker.orca.q.CompleteExecution
@@ -45,6 +45,9 @@ import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyNoMoreInteractions
 import com.nhaarman.mockito_kotlin.verifyZeroInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Duration
+import java.util.UUID
+import kotlin.collections.set
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.it
@@ -52,9 +55,6 @@ import org.jetbrains.spek.api.dsl.on
 import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
 import org.jetbrains.spek.subject.SubjectSpek
 import org.springframework.context.ApplicationEventPublisher
-import java.time.Duration
-import java.util.UUID
-import kotlin.collections.set
 
 object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
 
@@ -91,15 +91,19 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
       }
 
       it("updates the execution") {
-        verify(repository).updateStatus(message.executionType, message.executionId, stageStatus)
+        assertThat(pipeline.status).isEqualTo(stageStatus)
+        verify(repository).updateStatus(pipeline)
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<ExecutionComplete> {
-          assertThat(it.executionType).isEqualTo(pipeline.type)
-          assertThat(it.executionId).isEqualTo(pipeline.id)
-          assertThat(it.status).isEqualTo(stageStatus)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionComplete> {
+            assertThat(it.executionType).isEqualTo(pipeline.type)
+            assertThat(it.executionId).isEqualTo(pipeline.id)
+            assertThat(it.status).isEqualTo(stageStatus)
+            assertThat(it.execution.endTime).isNotNull()
+          }
+        )
       }
 
       it("does not queue any other commands") {
@@ -164,6 +168,7 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
 
       it("waits for the other branch(es)") {
         verify(repository, never()).updateStatus(eq(PIPELINE), eq(pipeline.id), any())
+        verify(repository, never()).updateStatus(any())
       }
 
       it("does not publish any events") {
@@ -206,15 +211,18 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
       }
 
       it("updates the pipeline status") {
-        verify(repository).updateStatus(PIPELINE, pipeline.id, stageStatus)
+        assertThat(pipeline.status).isEqualTo(stageStatus)
+        verify(repository).updateStatus(pipeline)
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<ExecutionComplete> {
-          assertThat(it.executionType).isEqualTo(pipeline.type)
-          assertThat(it.executionId).isEqualTo(pipeline.id)
-          assertThat(it.status).isEqualTo(stageStatus)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionComplete> {
+            assertThat(it.executionType).isEqualTo(pipeline.type)
+            assertThat(it.executionId).isEqualTo(pipeline.id)
+            assertThat(it.status).isEqualTo(stageStatus)
+          }
+        )
       }
 
       it("cancels other stages") {
@@ -255,15 +263,18 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
     }
 
     it("updates the execution") {
-      verify(repository).updateStatus(PIPELINE, message.executionId, TERMINAL)
+      assertThat(pipeline.status).isEqualTo(TERMINAL)
+      verify(repository).updateStatus(pipeline)
     }
 
     it("publishes an event") {
-      verify(publisher).publishEvent(check<ExecutionComplete> {
-        assertThat(it.executionType).isEqualTo(pipeline.type)
-        assertThat(it.executionId).isEqualTo(pipeline.id)
-        assertThat(it.status).isEqualTo(TERMINAL)
-      })
+      verify(publisher).publishEvent(
+        check<ExecutionComplete> {
+          assertThat(it.executionType).isEqualTo(pipeline.type)
+          assertThat(it.executionId).isEqualTo(pipeline.id)
+          assertThat(it.status).isEqualTo(TERMINAL)
+        }
+      )
     }
 
     it("does not queue any other commands") {
@@ -301,15 +312,18 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
     }
 
     it("updates the execution") {
-      verify(repository).updateStatus(PIPELINE, message.executionId, SUCCEEDED)
+      assertThat(pipeline.status).isEqualTo(SUCCEEDED)
+      verify(repository).updateStatus(pipeline)
     }
 
     it("publishes an event") {
-      verify(publisher).publishEvent(check<ExecutionComplete> {
-        assertThat(it.executionType).isEqualTo(pipeline.type)
-        assertThat(it.executionId).isEqualTo(pipeline.id)
-        assertThat(it.status).isEqualTo(SUCCEEDED)
-      })
+      verify(publisher).publishEvent(
+        check<ExecutionComplete> {
+          assertThat(it.executionType).isEqualTo(pipeline.type)
+          assertThat(it.executionId).isEqualTo(pipeline.id)
+          assertThat(it.status).isEqualTo(SUCCEEDED)
+        }
+      )
     }
 
     it("does not queue any other commands") {
@@ -354,6 +368,7 @@ object CompleteExecutionHandlerTest : SubjectSpek<CompleteExecutionHandler>({
 
     it("does not complete the execution") {
       verify(repository, never()).updateStatus(eq(PIPELINE), any(), any())
+      verify(repository, never()).updateStatus(any())
     }
 
     it("publishes no events") {

@@ -19,6 +19,9 @@ package com.netflix.spinnaker.orca.config
 import com.fasterxml.jackson.databind.DeserializationFeature
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.KotlinModule
+import com.jakewharton.retrofit.Ok3Client
+import com.netflix.spinnaker.config.DefaultServiceEndpoint
+import com.netflix.spinnaker.config.okhttp3.OkHttpClientProvider
 import com.netflix.spinnaker.orca.KeelService
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
 import org.springframework.beans.factory.annotation.Value
@@ -28,12 +31,12 @@ import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Configuration
 import retrofit.Endpoint
 import retrofit.Endpoints
+import retrofit.RequestInterceptor
 import retrofit.RestAdapter
-import retrofit.client.Client
 import retrofit.converter.JacksonConverter
 
 @Configuration
-@ConditionalOnProperty("keel.enabled")
+@ConditionalOnProperty("services.keel.enabled")
 @ComponentScan(
   basePackages = [
     "com.netflix.spinnaker.orca.keel.task",
@@ -41,19 +44,21 @@ import retrofit.converter.JacksonConverter
   ]
 )
 class KeelConfiguration {
-  @Bean fun keelEndpoint(@Value("\${keel.base-url}") keelBaseUrl: String): Endpoint {
+  @Bean fun keelEndpoint(@Value("\${services.keel.base-url}") keelBaseUrl: String): Endpoint {
     return Endpoints.newFixedEndpoint(keelBaseUrl)
   }
 
   @Bean fun keelService(
     keelEndpoint: Endpoint,
     keelObjectMapper: ObjectMapper,
-    retrofitClient: Client,
-    retrofitLogLevel: RestAdapter.LogLevel
+    clientProvider: OkHttpClientProvider,
+    retrofitLogLevel: RestAdapter.LogLevel,
+    spinnakerRequestInterceptor: RequestInterceptor
   ) =
     RestAdapter.Builder()
+      .setRequestInterceptor(spinnakerRequestInterceptor)
       .setEndpoint(keelEndpoint)
-      .setClient(retrofitClient)
+      .setClient(Ok3Client(clientProvider.getClient(DefaultServiceEndpoint("keel", keelEndpoint.url))))
       .setLogLevel(retrofitLogLevel)
       .setConverter(JacksonConverter(keelObjectMapper))
       .build()
@@ -61,6 +66,6 @@ class KeelConfiguration {
 
   @Bean fun keelObjectMapper() =
     OrcaObjectMapper.newInstance()
-    .registerModule(KotlinModule())
-    .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
+      .registerModule(KotlinModule())
+      .disable(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES)
 }

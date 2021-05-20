@@ -17,14 +17,18 @@
 package com.netflix.spinnaker.orca.clouddriver.pipeline.job
 
 import com.fasterxml.jackson.databind.ObjectMapper
-import com.netflix.spinnaker.orca.clouddriver.config.PreconfiguredJobStageProperties
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.preconfigured.jobs.PreconfiguredJobStageProperties
 import com.netflix.spinnaker.orca.clouddriver.exception.PreconfiguredJobNotFoundException
 import com.netflix.spinnaker.orca.clouddriver.service.JobService
 import com.netflix.spinnaker.orca.clouddriver.tasks.job.DestroyJobTask
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
+
+import javax.annotation.Nonnull
+
+import java.util.List
 
 @Component
 class PreconfiguredJobStage extends RunJobStage {
@@ -33,14 +37,14 @@ class PreconfiguredJobStage extends RunJobStage {
   private ObjectMapper objectMapper
 
   @Autowired
-  public PreconfiguredJobStage(DestroyJobTask destroyJobTask, Optional<JobService> optionalJobService) {
-    super(destroyJobTask)
+  PreconfiguredJobStage(DestroyJobTask destroyJobTask, List<RunJobStageDecorator> runJobStageDecorators, Optional<JobService> optionalJobService) {
+    super(destroyJobTask, runJobStageDecorators)
     this.jobService = optionalJobService.orElse(null)
     this.objectMapper = new ObjectMapper()
   }
 
   @Override
-  public void taskGraph(Stage stage, TaskNode.Builder builder) {
+  public void taskGraph(@Nonnull StageExecution stage, @Nonnull TaskNode.Builder builder) {
     def preconfiguredJob = jobService.getPreconfiguredStages().find { stage.type == it.type }
 
     if (!preconfiguredJob) {
@@ -74,19 +78,73 @@ class PreconfiguredJobStage extends RunJobStage {
     }
     preconfiguredJob.parameters.each { defaults ->
       if (defaults.defaultValue != null) {
-        Eval.xy(context, defaults.defaultValue, "x.${defaults.mapping} = y.toString()")
+        setNestedValue(context, defaults.mapping, defaults.defaultValue)
       }
     }
     if (context.parameters) {
       context.parameters.each { k, v ->
         def parameterDefinition = preconfiguredJob.parameters.find { it.name == k }
         if (parameterDefinition) {
-          Eval.xy(context, v, "x.${parameterDefinition.mapping} = y.toString()")
+          setNestedValue(context, parameterDefinition.mapping, v.toString())
         }
       }
     }
+
+    //Allow for parameters not defined in the preconfigured job parameters configuration to be passed
+    //in via dynamicPreconfiguredParameters.  This way additional optional parameters may be used
+    //without requiring an update to the configuration.
+    //If the root property does not exist in the preconfigured job configuration, an
+    //IllegalArgumentException is thrown.
+    if (context.dynamicParameters) {
+      context.dynamicParameters.each { k, v ->
+        setNestedValue(context, (String)k, v.toString())
+      }
+    }
+
     context.preconfiguredJobParameters = preconfiguredJob.parameters
     return context
+  }
+
+  private static void setNestedValue(Object root, String mapping, Object value) {
+    if (mapping == null) {
+      return
+    }
+
+    String[] props = mapping.split(/\./)
+    Object current = root
+    for (int i = 0; i < props.length - 1; i++) {
+      Object next
+      if(props[i] ==~ /.*\[\d+\]$/) {
+        next = getValueFromArrayExpression(current, props[i])
+      } else {
+        next = current[props[i]]
+        if (next == null) {
+          throw new IllegalArgumentException("no property ${props[i]} on $current")
+        }
+      }
+      current = next
+    }
+    current[props.last()] = value
+  }
+
+  private static Object getValueFromArrayExpression(Object root, String expression) {
+    // TODO: Do we need to handle arrays nested in other arrays?
+    String[] parts = expression.split(/[\[\]]/)
+    String propName = parts[0]
+    int index = -1
+    try {
+      index = Integer.parseInt(parts[1])
+    } catch (NumberFormatException ex) {
+      throw new IllegalArgumentException("Unable to parse index from expresion ${expression}", ex)
+    }
+    List<Object> nextList = root[propName]
+    if (nextList == null) {
+      throw new IllegalArgumentException("no property ${propName} on $root")
+    }
+    if (nextList.size() <= index || index < 0) {
+      throw new IllegalArgumentException("Invalid index $index for list $propName")
+    }
+    return nextList.get(index)
   }
 
 }

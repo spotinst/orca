@@ -20,23 +20,31 @@ import com.fasterxml.jackson.core.type.TypeReference
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.frigga.Names
 import com.netflix.spinnaker.kork.core.RetrySupport
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.OverridableTimeoutRetryableTask
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.OverridableTimeoutRetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.KatoRestService
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
 
 import javax.annotation.Nonnull
 import javax.annotation.Nullable
+import java.time.Duration
+import java.time.format.DateTimeParseException
 import java.util.concurrent.TimeUnit
 
 @Component
 public class WaitOnJobCompletion extends AbstractCloudProviderAwareTask implements OverridableTimeoutRetryableTask {
-  long backoffPeriod = TimeUnit.SECONDS.toMillis(10)
-  long timeout = TimeUnit.HOURS.toMillis(2)
+  private final Logger log = LoggerFactory.getLogger(getClass())
+
+  final long backoffPeriod = TimeUnit.SECONDS.toMillis(10)
+  final long timeout = TimeUnit.MINUTES.toMillis(120)
 
   @Autowired
   KatoRestService katoRestService
@@ -51,25 +59,46 @@ public class WaitOnJobCompletion extends AbstractCloudProviderAwareTask implemen
   JobUtils jobUtils
 
   static final String REFRESH_TYPE = "Job"
+  /**
+   * Extra time to pad the timing supplied by the job provider.
+   * E.g. if TitusJobRunner says this task is limited to 50minutes we will wait 50m + 5m(padding),
+   * we should wait a bit longer to allow for any inaccuracies of the clock across the systems
+   */
+  static final Duration PROVIDER_PADDING = Duration.ofMinutes(5)
+
+  @Override
+  long getDynamicTimeout(@Nonnull StageExecution stage) {
+    String jobTimeoutFromProvider = (stage.context.get("jobRuntimeLimit") as String)
+
+    if (jobTimeoutFromProvider != null) {
+      try {
+        return Duration.parse(jobTimeoutFromProvider).plus(PROVIDER_PADDING).toMillis()
+      } catch (DateTimeParseException e) {
+        log.warn("Failed to parse job timeout specified by provider: '${jobTimeoutFromProvider}', using default", e)
+      }
+    }
+
+    return getTimeout()
+  }
 
   @Override @Nullable
-  TaskResult onTimeout(@Nonnull Stage stage) {
+  TaskResult onTimeout(@Nonnull StageExecution stage) {
     jobUtils.cancelWait(stage)
 
     return null
   }
 
   @Override
-  void onCancel(@Nonnull Stage stage) {
+  void onCancel(@Nonnull StageExecution stage) {
     jobUtils.cancelWait(stage)
   }
 
   @Override
-  TaskResult execute(Stage stage) {
+  TaskResult execute(StageExecution stage) {
     String account = getCredentials(stage)
     Map<String, List<String>> jobs = stage.context."deploy.jobs"
 
-    def status = ExecutionStatus.RUNNING;
+    def status = ExecutionStatus.RUNNING
 
     if (!jobs) {
       throw new IllegalStateException("No jobs in stage context.")
@@ -100,30 +129,35 @@ public class WaitOnJobCompletion extends AbstractCloudProviderAwareTask implemen
       Map job = objectMapper.readValue(jobStream, new TypeReference<Map>() {})
       outputs.jobStatus = job
 
+      outputs.completionDetails = job.completionDetails
       switch ((String) job.jobState) {
         case "Succeeded":
           status = ExecutionStatus.SUCCEEDED
-          outputs.completionDetails = job.completionDetails
-
-          if (stage.context.propertyFile) {
-            Map<String, Object> properties = [:]
-            retrySupport.retry({
-              properties = katoRestService.getFileContents(appName, account, location, name, stage.context.propertyFile)
-              if (properties.size() == 0) {
-                throw new IllegalStateException("Expected properties file ${stage.context.propertyFile} but it was either missing, empty or contained invalid syntax")
-              }
-            }, 6, 5000, false) // retry for 30 seconds
-            outputs << properties
-            outputs.propertyFileContents = properties
-          }
-
-          return
+          break
 
         case "Failed":
           status = ExecutionStatus.TERMINAL
-          outputs.completionDetails = job.completionDetails
-          return
+          break
       }
+
+      if ((status == ExecutionStatus.SUCCEEDED) || (status == ExecutionStatus.TERMINAL)) {
+        if (stage.context.propertyFile) {
+          Map<String, Object> properties = [:]
+          retrySupport.retry({
+            properties = katoRestService.getFileContents(appName, account, location, name, stage.context.propertyFile)
+            if (properties.size() == 0) {
+              if (status == ExecutionStatus.SUCCEEDED) {
+                throw new ConfigurationException("Expected properties file ${stage.context.propertyFile} but it was either missing, empty or contained invalid syntax")
+              } else {
+                throw new ConfigurationException("Expected properties file ${stage.context.propertyFile} but it was either missing, empty or contained invalid syntax (this may be because the job failed)")
+              }
+            }
+          }, 6, 5000, false) // retry for 30 seconds
+          outputs << properties
+          outputs.propertyFileContents = properties
+        }
+      }
+
     }
 
     TaskResult.builder(status).context(outputs).outputs(outputs).build()

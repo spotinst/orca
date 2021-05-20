@@ -20,13 +20,13 @@ import com.fasterxml.jackson.databind.JavaType
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.NoopRegistry
 import com.netflix.spinnaker.kork.artifacts.model.Artifact
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
 import com.netflix.spinnaker.orca.pipeline.ExecutionLauncher
 import com.netflix.spinnaker.orca.pipeline.model.DefaultTrigger
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.Trigger
+import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
@@ -39,7 +39,6 @@ import com.netflix.spinnaker.orca.pipelinetemplate.v1schema.handler.v2.V2SchemaH
 import com.netflix.spinnaker.orca.pipelinetemplate.v1schema.model.PipelineTemplate
 import com.netflix.spinnaker.orca.pipelinetemplate.v1schema.model.TemplateConfiguration
 import com.netflix.spinnaker.orca.pipelinetemplate.v1schema.render.JinjaRenderer
-import com.netflix.spinnaker.security.User
 import org.slf4j.MDC
 import org.springframework.context.ApplicationContext
 import org.springframework.context.support.StaticApplicationContext
@@ -64,7 +63,7 @@ class DependentPipelineStarterSpec extends Specification {
     def triggeredPipelineConfig = [name: "triggered", id: "triggered"]
     def parentPipeline = pipeline {
       name = "parent"
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def gotMDC = [:]
     def executionLauncher = Stub(ExecutionLauncher) {
@@ -131,7 +130,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("manual", null, "fzlem@netflix.com", [:], [], [], false, true)
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def applicationContext = new StaticApplicationContext()
@@ -187,7 +186,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("webhook", null, "test", [:], [testArtifact]);
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def applicationContext = new StaticApplicationContext()
@@ -247,7 +246,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("webhook", null, "test")
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
       stage {
         id = "stage1"
         refId = "1"
@@ -318,7 +317,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("webhook", null, "test", [:], [testArtifact1, testArtifact2])
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def applicationContext = new StaticApplicationContext()
@@ -369,7 +368,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("manual", null, "fzlem@netflix.com", [:], [], [], false, true)
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def applicationContext = new StaticApplicationContext()
@@ -405,10 +404,8 @@ class DependentPipelineStarterSpec extends Specification {
     result.trigger.parameters.a == true
   }
 
-  private static User buildAuthenticatedUser(String email, List<String> allowedAccounts) {
-    def authenticatedUser = new User()
-    authenticatedUser.setEmail(email)
-    authenticatedUser.setAllowedAccounts(allowedAccounts)
+  private static PipelineExecution.AuthenticationDetails buildAuthenticatedUser(String email, List<String> allowedAccounts) {
+    def authenticatedUser = new PipelineExecution.AuthenticationDetails(email, allowedAccounts)
 
     return authenticatedUser
   }
@@ -419,7 +416,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("manual", null, "fzlem@netflix.com", [:], [], [], false, true)
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def applicationContext = new StaticApplicationContext()
@@ -515,7 +512,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("manual", null, "user@schibsted.com", [:], [], [], false, true)
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def templateLoader = Mock(TemplateLoader)
@@ -548,7 +545,7 @@ class DependentPipelineStarterSpec extends Specification {
     1 * executionLauncher.start(*_) >> {
       def p = mapper.readValue(it[1], Map)
       return pipeline {
-        JavaType type = mapper.getTypeFactory().constructCollectionType(List, Stage)
+        JavaType type = mapper.getTypeFactory().constructCollectionType(List, StageExecution)
         trigger = mapper.convertValue(p.trigger, Trigger)
         stages.addAll(mapper.convertValue(p.stages, type))
       }
@@ -647,7 +644,7 @@ class DependentPipelineStarterSpec extends Specification {
     def parentPipeline = pipeline {
       name = "parent"
       trigger = new DefaultTrigger("webhook", null, "test", [:], [testArtifact])
-      authentication = new Execution.AuthenticationDetails("parentUser", "acct1", "acct2")
+      authentication = new PipelineExecution.AuthenticationDetails("parentUser", "acct1", "acct2")
     }
     def executionLauncher = Mock(ExecutionLauncher)
     def templateLoader = Mock(TemplateLoader)
@@ -682,7 +679,7 @@ class DependentPipelineStarterSpec extends Specification {
       execution = it[0]
       execution = mapper.readValue(it[1], Map)
       return pipeline {
-        JavaType type = mapper.getTypeFactory().constructCollectionType(List, Stage)
+        JavaType type = mapper.getTypeFactory().constructCollectionType(List, StageExecution)
         trigger = mapper.convertValue(execution.trigger, Trigger)
         stages.addAll(mapper.convertValue(execution.stages, type))
       }

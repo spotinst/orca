@@ -20,25 +20,24 @@ import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.kork.annotations.VisibleForTesting
 import com.netflix.spinnaker.kork.core.RetrySupport
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
-import com.netflix.spinnaker.kork.exceptions.SpinnakerException
-import com.netflix.spinnaker.kork.web.exceptions.NotFoundException
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.RetryableTask
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.RetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.KatoService
 import com.netflix.spinnaker.orca.clouddriver.model.Task
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId
 import com.netflix.spinnaker.orca.clouddriver.utils.CloudProviderAware
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
 import com.netflix.spinnaker.orca.pipeline.model.SystemNotification
 import groovy.transform.CompileStatic
 import groovy.transform.TypeCheckingMode
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.stereotype.Component
 import retrofit.RetrofitError
 
+import javax.annotation.Nonnull
 import java.time.Clock
 import java.time.Duration
 import java.util.concurrent.TimeUnit
@@ -63,6 +62,7 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
     this(katoService, registry, Clock.systemUTC(), dynamicConfigService, retrySupport)
   }
 
+  @VisibleForTesting
   MonitorKatoTask(KatoService katoService, Registry registry, Clock clock, DynamicConfigService dynamicConfigService, RetrySupport retrySupport) {
     this.registry = registry
     this.clock = clock
@@ -76,7 +76,7 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
   long getTimeout() { 3600000L }
 
   @Override
-  long getDynamicBackoffPeriod(Stage stage, Duration taskDuration) {
+  long getDynamicBackoffPeriod(StageExecution stage, Duration taskDuration) {
     if ((stage.context."kato.task.lastStatus" as ExecutionStatus) == ExecutionStatus.TERMINAL) {
       return Math.max(backoffPeriod, TimeUnit.MINUTES.toMillis(2))
     }
@@ -84,7 +84,13 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
   }
 
   @Override
-  TaskResult execute(Stage stage) {
+  TaskResult onTimeout(@Nonnull StageExecution stage) {
+    monitorFinalTerminalRetry(stage, "timeout")
+    return null
+  }
+
+  @Override
+  TaskResult execute(StageExecution stage) {
     TaskId taskId = stage.context."kato.last.task.id" as TaskId
     if (!taskId) {
       return TaskResult.ofStatus(ExecutionStatus.SUCCEEDED)
@@ -141,7 +147,7 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
       if (stage.context."kato.task.retriedOperation" == true) {
         Integer totalRetries = stage.context."kato.task.terminalRetryCount" as Integer
         log.info("Completed kato task ${katoTask.id} (total retries: ${totalRetries}) after exception: {}", getException(katoTask))
-        stage.execution.systemNotifications.add(new SystemNotification(
+        ((PipelineExecutionImpl) stage.execution).systemNotifications.add(new SystemNotification(
           clock.millis(),
           "katoRetryTask",
           "Completed cloud provider retry",
@@ -170,7 +176,7 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
     }
 
     if (shouldRetry(katoTask, status)) {
-      stage.execution.systemNotifications.add(
+      ((PipelineExecutionImpl) stage.execution).systemNotifications.add(
         new SystemNotification(
         clock.millis(),
         "katoRetryTask",
@@ -180,6 +186,15 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
       try {
         kato.resumeTask(katoTask.id)
       } catch (Exception e) {
+        if (e instanceof RetrofitError) {
+          RetrofitError retrofitError = (RetrofitError) e
+          if (retrofitError?.response?.status == 404) {
+            monitorFinalTerminalRetry(stage, "404")
+            // unexpected -- no sense attempting to resume a saga that `clouddriver` has no knowledge about
+            throw e
+          }
+        }
+
         // Swallow the exception; we'll let Orca retry the next time around.
         log.error("Request failed attempting to resume task", e)
       }
@@ -215,6 +230,20 @@ class MonitorKatoTask implements RetryableTask, CloudProviderAware {
       return ExecutionStatus.SUCCEEDED
     } else {
       return ExecutionStatus.RUNNING
+    }
+  }
+
+  /**
+   * Log and emits a metric when a kato task retry is finally terminal - typically either from
+   * the task timing out or from an unexpected error, like a 404, when attempting to retry.
+   */
+  private void monitorFinalTerminalRetry(StageExecution stage, String reason) {
+    if (stage.context."kato.task.retriedOperation" == true) {
+      TaskId taskId = stage.context."kato.last.task.id" as TaskId
+      Integer totalRetries = stage.context."kato.task.terminalRetryCount" as Integer
+      log.warn("Failed retrying kato task '{}' (retries: '{}') due to reason: '{}'", taskId.id,
+          totalRetries, reason)
+      registry.counter("monitorKatoTask.terminalRetry", "reason", reason).increment()
     }
   }
 

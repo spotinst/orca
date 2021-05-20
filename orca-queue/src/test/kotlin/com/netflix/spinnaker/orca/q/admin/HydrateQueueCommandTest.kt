@@ -15,17 +15,16 @@
  */
 package com.netflix.spinnaker.orca.q.admin
 
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
 import com.netflix.spinnaker.orca.TaskResolver
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.ORCHESTRATION
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
+import com.netflix.spinnaker.orca.api.test.task
 import com.netflix.spinnaker.orca.ext.beforeStages
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.fixture.task
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.ORCHESTRATION
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository.ExecutionCriteria
 import com.netflix.spinnaker.orca.q.CompleteExecution
@@ -34,6 +33,7 @@ import com.netflix.spinnaker.orca.q.DummyTask
 import com.netflix.spinnaker.orca.q.RunTask
 import com.netflix.spinnaker.orca.q.StartStage
 import com.netflix.spinnaker.orca.q.StartTask
+import com.netflix.spinnaker.orca.q.TasksProvider
 import com.netflix.spinnaker.orca.q.handler.plan
 import com.netflix.spinnaker.orca.q.stageWithSyntheticAfter
 import com.netflix.spinnaker.orca.q.stageWithSyntheticBefore
@@ -52,6 +52,7 @@ import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyNoMoreInteractions
 import com.nhaarman.mockito_kotlin.verifyZeroInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Instant
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
@@ -60,13 +61,12 @@ import org.jetbrains.spek.api.dsl.on
 import org.jetbrains.spek.api.lifecycle.CachingMode
 import org.jetbrains.spek.subject.SubjectSpek
 import rx.Observable
-import java.time.Instant
 
 object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
 
   val queue: Queue = mock()
   val repository: ExecutionRepository = mock()
-  val taskResolver = TaskResolver(emptyList())
+  val taskResolver = TaskResolver(TasksProvider(emptyList()))
 
   subject(CachingMode.GROUP) {
     HydrateQueueCommand(queue, repository, taskResolver)
@@ -98,7 +98,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.RUNNING
+          status = RUNNING
         }
       }
       val newPipeline = pipeline {
@@ -108,7 +108,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.RUNNING
+          status = RUNNING
         }
       }
 
@@ -119,11 +119,13 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
       afterGroup(::resetMocks)
 
       on("invoking") {
-        subject.invoke(HydrateQueueInput(
-          start = Instant.ofEpochMilli(1500002000),
-          end = Instant.ofEpochMilli(1500004000),
-          dryRun = false
-        ))
+        subject.invoke(
+          HydrateQueueInput(
+            start = Instant.ofEpochMilli(1500002000),
+            end = Instant.ofEpochMilli(1500004000),
+            dryRun = false
+          )
+        )
 
         it("does nothing") {
           verifyZeroInteractions(queue)
@@ -139,7 +141,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.RUNNING
+          status = RUNNING
         }
       }
 
@@ -167,7 +169,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.NOT_STARTED
+          status = NOT_STARTED
         }
       }
 
@@ -181,9 +183,11 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         subject.invoke(HydrateQueueInput(dryRun = false))
 
         it("adds messages to the queue") {
-          verify(queue, times(1)).push(check<StartStage> {
-            assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
-          })
+          verify(queue, times(1)).push(
+            check<StartStage> {
+              assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
+            }
+          )
           verifyNoMoreInteractions(queue)
         }
       }
@@ -196,7 +200,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.SUCCEEDED
+          status = SUCCEEDED
         }
       }
 
@@ -391,10 +395,12 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         subject.invoke(HydrateQueueInput(dryRun = false))
 
         it("adds messages to the queue") {
-          verify(queue, times(1)).push(check<StartTask> {
-            assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
-            assertThat(it.taskId).isEqualTo(pipeline.stageByRef("1").taskById("t1").id)
-          })
+          verify(queue, times(1)).push(
+            check<StartTask> {
+              assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
+              assertThat(it.taskId).isEqualTo(pipeline.stageByRef("1").taskById("t1").id)
+            }
+          )
           verifyNoMoreInteractions(queue)
         }
       }
@@ -426,9 +432,11 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         subject.invoke(HydrateQueueInput(dryRun = false))
 
         it("adds messages to the queue") {
-          verify(queue, times(1)).push(check<CompleteStage> {
-            assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
-          })
+          verify(queue, times(1)).push(
+            check<CompleteStage> {
+              assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
+            }
+          )
           verifyNoMoreInteractions(queue)
         }
       }
@@ -443,7 +451,7 @@ object HydrateQueueCommandTest : SubjectSpek<HydrateQueueCommand>({
         stage {
           refId = "1"
           type = "whatever"
-          status = ExecutionStatus.NOT_STARTED
+          status = NOT_STARTED
         }
       }
 

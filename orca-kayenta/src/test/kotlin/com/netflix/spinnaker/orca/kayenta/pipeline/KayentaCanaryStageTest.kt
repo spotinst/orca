@@ -16,8 +16,8 @@
 
 package com.netflix.spinnaker.orca.kayenta.pipeline
 
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
+import com.netflix.spinnaker.orca.api.test.stage
+import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilderImpl
 import com.netflix.spinnaker.time.fixedClock
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.Spek
@@ -38,11 +38,13 @@ object KayentaCanaryStageTest : Spek({
         context["canaryConfig"] = mapOf(
           "metricsAccountName" to "atlas-acct-1",
           "canaryConfigId" to "MySampleAtlasCanaryConfig",
-          "scopes" to listOf(mapOf(
-            "controlScope" to "some.host.node",
-            "experimentScope" to "some.other.host.node",
-            "step" to 60
-          )),
+          "scopes" to listOf(
+            mapOf(
+              "controlScope" to "some.host.node",
+              "experimentScope" to "some.other.host.node",
+              "step" to 60
+            )
+          ),
           "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
           "canaryAnalysisIntervalMins" to 6.hoursInMinutes,
           "lifetimeHours" to "12"
@@ -55,7 +57,7 @@ object KayentaCanaryStageTest : Spek({
         )
       }
 
-      val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+      val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
         .let { graph ->
           builder.beforeStages(kayentaCanaryStage, graph)
           graph.build()

@@ -21,15 +21,22 @@ import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.sql.config.DefaultSqlConfiguration
 import com.netflix.spinnaker.kork.sql.config.SqlProperties
 import com.netflix.spinnaker.kork.telemetry.InstrumentedProxy
+import com.netflix.spinnaker.orca.api.pipeline.persistence.ExecutionRepositoryListener
+import com.netflix.spinnaker.orca.interlink.Interlink
 import com.netflix.spinnaker.orca.notifications.NotificationClusterLock
 import com.netflix.spinnaker.orca.notifications.SqlNotificationClusterLock
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.sql.SpringLiquibaseProxy
 import com.netflix.spinnaker.orca.sql.SqlHealthIndicator
 import com.netflix.spinnaker.orca.sql.SqlHealthcheckActivator
+import com.netflix.spinnaker.orca.sql.pipeline.persistence.ExecutionStatisticsRepository
 import com.netflix.spinnaker.orca.sql.pipeline.persistence.SqlExecutionRepository
+import com.netflix.spinnaker.orca.sql.telemetry.SqlActiveExecutionsMonitor
+import java.time.Clock
+import java.util.Optional
 import liquibase.integration.spring.SpringLiquibase
 import org.jooq.DSLContext
+import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -39,7 +46,6 @@ import org.springframework.context.annotation.ComponentScan
 import org.springframework.context.annotation.Configuration
 import org.springframework.context.annotation.Import
 import org.springframework.context.annotation.Primary
-import java.time.Clock
 
 @Configuration
 @ConditionalOnProperty("sql.enabled")
@@ -53,12 +59,15 @@ class SqlConfiguration {
     SpringLiquibaseProxy(properties)
 
   @ConditionalOnProperty("execution-repository.sql.enabled")
-  @Bean fun sqlExecutionRepository(
+  @Bean
+  fun sqlExecutionRepository(
     dsl: DSLContext,
     mapper: ObjectMapper,
     registry: Registry,
     properties: SqlProperties,
-    orcaSqlProperties: OrcaSqlProperties
+    orcaSqlProperties: OrcaSqlProperties,
+    interlink: Optional<Interlink>,
+    executionRepositoryListeners: Collection<ExecutionRepositoryListener>
   ) =
     SqlExecutionRepository(
       orcaSqlProperties.partitionName,
@@ -66,13 +75,16 @@ class SqlConfiguration {
       mapper,
       properties.retries.transactions,
       orcaSqlProperties.batchReadSize,
-      orcaSqlProperties.stageReadSize
+      orcaSqlProperties.stageReadSize,
+      interlink = interlink.orElse(null),
+      executionRepositoryListeners = executionRepositoryListeners
     ).let {
       InstrumentedProxy.proxy(registry, it, "sql.executions", mapOf(Pair("repository", "primary"))) as ExecutionRepository
     }
 
   @ConditionalOnProperty("execution-repository.sql.enabled", "execution-repository.sql.secondary.enabled")
-  @Bean fun secondarySqlExecutionRepository(
+  @Bean
+  fun secondarySqlExecutionRepository(
     dsl: DSLContext,
     mapper: ObjectMapper,
     registry: Registry,
@@ -92,10 +104,21 @@ class SqlConfiguration {
       InstrumentedProxy.proxy(registry, it, "sql.executions", mapOf(Pair("repository", "secondary"))) as ExecutionRepository
     }
 
-  @Bean fun sqlHealthcheckActivator(dsl: DSLContext, registry: Registry) =
+  @ConditionalOnProperty("monitor.active-executions.redis", havingValue = "false")
+  @Bean
+  fun sqlActiveExecutionsMonitor(
+    @Qualifier("sqlExecutionRepository") executionRepository: ExecutionStatisticsRepository,
+    registry: Registry,
+    @Value("\${monitor.active-executions.refresh.frequency.ms:60000}") refreshFrequencyMs: Long
+  ) =
+    SqlActiveExecutionsMonitor(executionRepository, registry, refreshFrequencyMs)
+
+  @Bean
+  fun sqlHealthcheckActivator(dsl: DSLContext, registry: Registry) =
     SqlHealthcheckActivator(dsl, registry)
 
-  @Bean("dbHealthIndicator") fun dbHealthIndicator(
+  @Bean("dbHealthIndicator")
+  fun dbHealthIndicator(
     sqlHealthcheckActivator: SqlHealthcheckActivator,
     sqlProperties: SqlProperties,
     dynamicConfigService: DynamicConfigService

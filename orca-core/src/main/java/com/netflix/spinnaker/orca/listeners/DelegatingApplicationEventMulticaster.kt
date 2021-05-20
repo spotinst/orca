@@ -33,12 +33,12 @@ class DelegatingApplicationEventMulticaster(
   private val asyncApplicationEventMulticaster: ApplicationEventMulticaster
 ) : ApplicationEventMulticaster, BeanFactoryAware, BeanClassLoaderAware {
 
-  override fun multicastEvent(event: ApplicationEvent?) {
+  override fun multicastEvent(event: ApplicationEvent) {
     asyncApplicationEventMulticaster.multicastEvent(event)
     syncApplicationEventMulticaster.multicastEvent(event)
   }
 
-  override fun multicastEvent(event: ApplicationEvent?, eventType: ResolvableType?) {
+  override fun multicastEvent(event: ApplicationEvent, eventType: ResolvableType?) {
     asyncApplicationEventMulticaster.multicastEvent(event, eventType)
     syncApplicationEventMulticaster.multicastEvent(event, eventType)
   }
@@ -56,7 +56,8 @@ class DelegatingApplicationEventMulticaster(
       return true
     }
     if (listener is InspectableApplicationListenerMethodAdapter &&
-      listener.getMethod().getAnnotation(Sync::class.java) != null) {
+      listener.getMethod().getAnnotation(Sync::class.java) != null
+    ) {
       return true
     }
     return false
@@ -82,7 +83,7 @@ class DelegatingApplicationEventMulticaster(
     asyncApplicationEventMulticaster.removeApplicationListenerBean(listenerBeanName)
   }
 
-  override fun setBeanFactory(beanFactory: BeanFactory?) {
+  override fun setBeanFactory(beanFactory: BeanFactory) {
     if (asyncApplicationEventMulticaster is BeanFactoryAware) {
       asyncApplicationEventMulticaster.setBeanFactory(beanFactory)
     }
@@ -91,7 +92,7 @@ class DelegatingApplicationEventMulticaster(
     }
   }
 
-  override fun setBeanClassLoader(classLoader: ClassLoader?) {
+  override fun setBeanClassLoader(classLoader: ClassLoader) {
     if (asyncApplicationEventMulticaster is BeanClassLoaderAware) {
       asyncApplicationEventMulticaster.setBeanClassLoader(classLoader)
     }

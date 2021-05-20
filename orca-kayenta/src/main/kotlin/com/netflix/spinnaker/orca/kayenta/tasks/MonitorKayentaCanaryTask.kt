@@ -16,20 +16,20 @@
 
 package com.netflix.spinnaker.orca.kayenta.tasks
 
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.OverridableTimeoutRetryableTask
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.OverridableTimeoutRetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.ext.mapTo
 import com.netflix.spinnaker.orca.kayenta.CanaryResults
 import com.netflix.spinnaker.orca.kayenta.KayentaService
 import com.netflix.spinnaker.orca.kayenta.Thresholds
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import org.springframework.stereotype.Component
 import java.util.concurrent.TimeUnit.HOURS
+import org.springframework.stereotype.Component
 
 @Component
 class MonitorKayentaCanaryTask(
@@ -47,7 +47,7 @@ class MonitorKayentaCanaryTask(
     val scoreThresholds: Thresholds
   )
 
-  override fun execute(stage: Stage): TaskResult {
+  override fun execute(stage: StageExecution): TaskResult {
     val context = stage.mapTo<MonitorKayentaCanaryContext>()
     val canaryResults = kayentaService.getCanaryResults(context.storageAccountName, context.canaryPipelineExecutionId)
 
@@ -58,24 +58,28 @@ class MonitorKayentaCanaryTask(
 
       return if (canaryScore <= context.scoreThresholds.marginal) {
         val resultStatus = if (stage.context["continuePipeline"] == true) FAILED_CONTINUE else TERMINAL
-        TaskResult.builder(resultStatus).context(mapOf(
-          "canaryPipelineStatus" to SUCCEEDED,
-          "lastUpdated" to canaryResults.endTimeIso?.toEpochMilli(),
-          "lastUpdatedIso" to canaryResults.endTimeIso,
-          "durationString" to canaryResults.result.canaryDuration.toString(),
-          "canaryScore" to canaryScore,
-          "canaryScoreMessage" to "Canary score is not above the marginal score threshold.",
-          "warnings" to warnings
-        )).build()
+        TaskResult.builder(resultStatus).context(
+          mapOf(
+            "canaryPipelineStatus" to SUCCEEDED,
+            "lastUpdated" to canaryResults.endTimeIso?.toEpochMilli(),
+            "lastUpdatedIso" to canaryResults.endTimeIso,
+            "durationString" to canaryResults.result.canaryDuration?.toString(),
+            "canaryScore" to canaryScore,
+            "canaryScoreMessage" to "Canary score is not above the marginal score threshold.",
+            "warnings" to warnings
+          )
+        ).build()
       } else {
-        TaskResult.builder(SUCCEEDED).context(mapOf(
-          "canaryPipelineStatus" to SUCCEEDED,
-          "lastUpdated" to canaryResults.endTimeIso?.toEpochMilli(),
-          "lastUpdatedIso" to canaryResults.endTimeIso,
-          "durationString" to canaryResults.result.canaryDuration.toString(),
-          "canaryScore" to canaryScore,
-          "warnings" to warnings
-        )).build()
+        TaskResult.builder(SUCCEEDED).context(
+          mapOf(
+            "canaryPipelineStatus" to SUCCEEDED,
+            "lastUpdated" to canaryResults.endTimeIso?.toEpochMilli(),
+            "lastUpdatedIso" to canaryResults.endTimeIso,
+            "durationString" to canaryResults.result.canaryDuration?.toString(),
+            "canaryScore" to canaryScore,
+            "warnings" to warnings
+          )
+        ).build()
       }
     }
 

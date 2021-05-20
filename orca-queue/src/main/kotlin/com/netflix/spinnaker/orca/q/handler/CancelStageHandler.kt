@@ -16,20 +16,22 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.CancellableStage
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
 import com.netflix.spinnaker.orca.TaskResolver
+import com.netflix.spinnaker.orca.api.pipeline.CancellableStage
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.TaskExecution
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.StageNavigator
 import com.netflix.spinnaker.orca.q.CancelStage
 import com.netflix.spinnaker.orca.q.RescheduleExecution
 import com.netflix.spinnaker.orca.q.RunTask
 import com.netflix.spinnaker.q.Queue
+import com.netflix.spinnaker.security.AuthenticatedRequest
+import java.util.concurrent.Executor
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.stereotype.Component
-import java.util.concurrent.Executor
 
 @Component
 class CancelStageHandler(
@@ -85,10 +87,11 @@ class CancelStageHandler(
             // for the time being we execute this off-thread as some cancel
             // routines may run long enough to cause message acknowledgment to
             // time out.
-            executor.execute {
+            val cancellationClosure = AuthenticatedRequest.propagate {
               stage.withAuth {
                 builder.cancel(stage)
               }
+
               // Special case for PipelineStage to ensure prompt cancellation of
               // child pipelines and deployment strategies regardless of task backoff
               if (stage.type.equals("pipeline", true) && stage.context.containsKey("executionId")) {
@@ -99,6 +102,9 @@ class CancelStageHandler(
                 }
               }
             }
+            executor.execute {
+              cancellationClosure.call()
+            }
           }
         }
       }
@@ -106,6 +112,6 @@ class CancelStageHandler(
   }
 
   @Suppress("UNCHECKED_CAST")
-  private val com.netflix.spinnaker.orca.pipeline.model.Task.type
+  private val TaskExecution.type
     get() = taskResolver.getTaskClass(implementingClass)
 }

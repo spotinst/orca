@@ -16,10 +16,11 @@
 
 package com.netflix.spinnaker.orca.igor.tasks
 
-import com.netflix.spinnaker.orca.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.clouddriver.pipeline.job.model.JobStatus
 import com.netflix.spinnaker.orca.igor.BuildService
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
 import retrofit.RetrofitError
 import retrofit.client.Response
 import spock.lang.Shared
@@ -32,12 +33,12 @@ class MonitorJenkinsJobTaskSpec extends Specification {
   MonitorJenkinsJobTask task = new MonitorJenkinsJobTask()
 
   @Shared
-  def pipeline = Execution.newPipeline("orca")
+  def pipeline = PipelineExecutionImpl.newPipeline("orca")
 
   @Unroll
   def "should return #taskStatus if job is #jobState"() {
     given:
-    def stage = new Stage(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
+    def stage = new StageExecutionImpl(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
 
     and:
     task.buildService = Stub(BuildService) {
@@ -60,7 +61,7 @@ class MonitorJenkinsJobTaskSpec extends Specification {
   @Unroll
   def "should ignore job state when build is running"() {
     given:
-    def stage = new Stage(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
+    def stage = new StageExecutionImpl(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
 
     and:
     task.buildService = Stub(BuildService) {
@@ -82,7 +83,7 @@ class MonitorJenkinsJobTaskSpec extends Specification {
   @Unroll
   def "should ignore job state when build is building"() {
     given:
-    def stage = new Stage(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
+    def stage = new StageExecutionImpl(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
 
     and:
     task.buildService = Stub(BuildService) {
@@ -103,7 +104,7 @@ class MonitorJenkinsJobTaskSpec extends Specification {
 
   def "should return running status if igor call 404/500/503's"() {
     given:
-    def stage = new Stage(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
+    def stage = new StageExecutionImpl(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
 
     and:
     def exception = Stub(RetrofitError) {
@@ -136,7 +137,7 @@ class MonitorJenkinsJobTaskSpec extends Specification {
 
   def "marks 'unstable' results as successful if explicitly configured to do so"() {
     given:
-    def stage = new Stage(pipeline, "jenkins",
+    def stage = new StageExecutionImpl(pipeline, "jenkins",
       [master: "builds", job: "orca", buildNumber: 4, markUnstableAsSuccessful: markUnstableAsSuccessful])
 
 
@@ -153,5 +154,33 @@ class MonitorJenkinsJobTaskSpec extends Specification {
     true                     | ExecutionStatus.SUCCEEDED
     false                    | ExecutionStatus.TERMINAL
     null                     | ExecutionStatus.TERMINAL
+  }
+
+  @Unroll
+  def 'provides breadcrumb stage error message in failure states'() {
+    given:
+    def stage = new StageExecutionImpl(pipeline, "jenkins", [master: "builds", job: "orca", buildNumber: 4])
+
+    and:
+    task.buildService = Stub(BuildService) {
+      getBuild(stage.context.buildNumber, stage.context.master, stage.context.job) >> [result: jobState]
+    }
+
+    when:
+    task.execute(stage)
+
+    then:
+    if (expectedErrorMessage) {
+      stage.context.exception.details.errors.contains(expectedErrorMessage)
+    } else {
+      stage.context.exception == null
+    }
+
+    where:
+    jobState                                        || expectedErrorMessage
+    MonitorJenkinsJobTask.JenkinsJobStatus.ABORTED  || "Job was aborted (see Jenkins)"
+    MonitorJenkinsJobTask.JenkinsJobStatus.FAILURE  || "Job failed (see Jenkins)"
+    MonitorJenkinsJobTask.JenkinsJobStatus.SUCCESS  || false
+    MonitorJenkinsJobTask.JenkinsJobStatus.UNSTABLE || "Job is unstable"
   }
 }

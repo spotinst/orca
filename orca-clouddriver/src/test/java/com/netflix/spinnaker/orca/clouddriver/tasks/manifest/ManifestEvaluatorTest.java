@@ -18,6 +18,10 @@ package com.netflix.spinnaker.orca.clouddriver.tasks.manifest;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
+import static org.mockito.ArgumentMatchers.anyBoolean;
+import static org.mockito.ArgumentMatchers.anyMap;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
@@ -28,7 +32,8 @@ import com.netflix.spinnaker.kork.core.RetrySupport;
 import com.netflix.spinnaker.orca.clouddriver.OortService;
 import com.netflix.spinnaker.orca.clouddriver.tasks.manifest.ManifestContext.BindArtifact;
 import com.netflix.spinnaker.orca.clouddriver.tasks.manifest.ManifestContext.Source;
-import com.netflix.spinnaker.orca.pipeline.model.Stage;
+import com.netflix.spinnaker.orca.pipeline.expressions.PipelineExpressionEvaluator;
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl;
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils;
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor;
 import java.util.List;
@@ -58,6 +63,17 @@ final class ManifestEvaluatorTest {
   private final TypedString manifestString =
       new TypedString("{'metadata': {'name': 'my-manifest'}}");
 
+  private final TypedString spelManifestString =
+      new TypedString("{\"metadata\": {\"name\": \"${manifest}\"}}");
+
+  private final String manifestsWithEmptyDocument =
+      "---\n"
+          + "metadata:\n"
+          + "  name: my-manifest\n"
+          + "---\n"
+          + "# Source: k8s_namespaces/templates/00-namespaces.yaml\n"
+          + "# this is an empty yaml document\n";
+
   @BeforeEach
   void setup() {
     manifestEvaluator =
@@ -67,7 +83,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void textManifestSuccess() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     DeployManifestContext context =
         DeployManifestContext.builder().source(Source.Text).manifests(manifests).build();
     ManifestEvaluator.Result result = manifestEvaluator.evaluate(stage, context);
@@ -77,7 +93,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void nullTextManifestFailure() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     DeployManifestContext context =
         DeployManifestContext.builder().source(Source.Text).manifests(null).build();
 
@@ -86,8 +102,44 @@ final class ManifestEvaluatorTest {
   }
 
   @Test
+  void artifactManifestIgnoreNullYAMLDocuments() {
+
+    StageExecutionImpl stage = new StageExecutionImpl();
+    Artifact manifestArtifact =
+        Artifact.builder()
+            .artifactAccount("my-artifact-account")
+            .type("embedded/base64")
+            .customKind(false)
+            .name("somename")
+            .reference(
+                "LS0tCm1ldGFkYXRhOgogIG5hbWU6IG15LW1hbmlmZXN0Ci0tLQojIFNvdXJjZTogazhzX25hbWVzcGFjZXMvdGVtcGxhdGVzLzAwLW5hbWVzcGFjZXMueWFtbAoK")
+            .build();
+
+    DeployManifestContext context =
+        DeployManifestContext.builder()
+            .source(Source.Artifact)
+            .manifestArtifact(manifestArtifact)
+            .skipExpressionEvaluation(true)
+            .build();
+
+    when(artifactUtils.getBoundArtifactForStage(stage, null, manifestArtifact))
+        .thenReturn(manifestArtifact);
+    when(oortService.fetchArtifact(manifestArtifact))
+        .thenReturn(
+            new Response(
+                "http://my-url",
+                200,
+                "",
+                ImmutableList.of(),
+                new TypedString(manifestsWithEmptyDocument)));
+
+    ManifestEvaluator.Result result = manifestEvaluator.evaluate(stage, context);
+    assertThat(result.getManifests()).isEqualTo(manifests);
+  }
+
+  @Test
   void artifactManifestSuccess() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     Artifact manifestArtifact = Artifact.builder().artifactAccount("my-artifact-account").build();
     DeployManifestContext context =
         DeployManifestContext.builder()
@@ -107,7 +159,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void artifactManifestByIdSuccess() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     Artifact manifestArtifact =
         Artifact.builder()
             .artifactAccount("my-artifact-account")
@@ -131,7 +183,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void artifactManifestMissingFailure() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     DeployManifestContext context =
         DeployManifestContext.builder()
             .source(Source.Artifact)
@@ -146,7 +198,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void artifactManifestNoAccountFailure() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     Artifact manifestArtifact = Artifact.builder().build();
     DeployManifestContext context =
         DeployManifestContext.builder()
@@ -164,7 +216,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void artifactManifestSkipSpelEvaluation() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     Artifact manifestArtifact =
         Artifact.builder()
             .artifactAccount("my-artifact-account")
@@ -188,7 +240,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void requiredArtifacts() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     Artifact artifactA = Artifact.builder().name("artifact-a").build();
     Artifact artifactB = Artifact.builder().name("artifact-b").build();
     BindArtifact bindArtifact = new BindArtifact();
@@ -212,7 +264,7 @@ final class ManifestEvaluatorTest {
 
   @Test
   void optionalArtifacts() {
-    Stage stage = new Stage();
+    StageExecutionImpl stage = new StageExecutionImpl();
     DeployManifestContext context =
         DeployManifestContext.builder().source(Source.Text).manifests(manifests).build();
     ImmutableList<Artifact> optionalArtifacts =
@@ -222,5 +274,73 @@ final class ManifestEvaluatorTest {
 
     ManifestEvaluator.Result result = manifestEvaluator.evaluate(stage, context);
     assertThat(result.getOptionalArtifacts()).isEqualTo(optionalArtifacts);
+  }
+
+  @Test
+  void shouldThrowExceptionWhenFailedEvaluatingManifestExpressions() {
+    StageExecutionImpl stage = new StageExecutionImpl();
+    stage.getContext().put("failOnFailedExpressions", true);
+
+    Artifact manifestArtifact =
+        Artifact.builder()
+            .artifactAccount("my-artifact-account")
+            .name("my-manifest-artifact")
+            .build();
+    DeployManifestContext context =
+        DeployManifestContext.builder()
+            .manifestArtifactId("my-manifest-artifact-id")
+            .skipExpressionEvaluation(false)
+            .source(Source.Artifact)
+            .build();
+
+    Map<String, Object> processorResult =
+        ImmutableMap.of(
+            PipelineExpressionEvaluator.SUMMARY,
+            "error",
+            "manifests",
+            ImmutableList.of(spelManifestString));
+
+    when(artifactUtils.getBoundArtifactForStage(stage, "my-manifest-artifact-id", null))
+        .thenReturn(manifestArtifact);
+    when(oortService.fetchArtifact(manifestArtifact))
+        .thenReturn(new Response("http://my-url", 200, "", ImmutableList.of(), spelManifestString));
+    when(contextParameterProcessor.process(anyMap(), isNull(), anyBoolean()))
+        .thenReturn(processorResult);
+
+    assertThatThrownBy(() -> manifestEvaluator.evaluate(stage, context))
+        .isInstanceOf(IllegalStateException.class);
+  }
+
+  @Test
+  void shouldSucceedWhenFailedEvaluatingManifestExpressionsWithFlagSet() {
+    StageExecutionImpl stage = new StageExecutionImpl();
+    stage.getContext().put("failOnFailedExpressions", false);
+    Artifact manifestArtifact =
+        Artifact.builder()
+            .artifactAccount("my-artifact-account")
+            .name("my-manifest-artifact")
+            .build();
+    DeployManifestContext context =
+        DeployManifestContext.builder()
+            .manifestArtifactId("my-manifest-artifact-id")
+            .skipExpressionEvaluation(false)
+            .source(Source.Artifact)
+            .build();
+
+    Map<String, Object> processorResult =
+        ImmutableMap.of(
+            PipelineExpressionEvaluator.SUMMARY,
+            "error",
+            "manifests",
+            ImmutableList.of(spelManifestString));
+
+    when(artifactUtils.getBoundArtifactForStage(stage, "my-manifest-artifact-id", null))
+        .thenReturn(manifestArtifact);
+    when(oortService.fetchArtifact(manifestArtifact))
+        .thenReturn(new Response("http://my-url", 200, "", ImmutableList.of(), spelManifestString));
+    when(contextParameterProcessor.process(anyMap(), isNull(), anyBoolean()))
+        .thenReturn(processorResult);
+
+    assertDoesNotThrow(() -> manifestEvaluator.evaluate(stage, context));
   }
 }

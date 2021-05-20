@@ -19,18 +19,19 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.BasicTag
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
+import com.netflix.spinnaker.orca.pipelinetemplate.exceptions.PipelineMissingTemplateVariabledException
 import com.netflix.spinnaker.orca.pipelinetemplate.handler.DefaultHandlerChain
 import com.netflix.spinnaker.orca.pipelinetemplate.handler.GlobalPipelineTemplateContext
 import com.netflix.spinnaker.orca.pipelinetemplate.handler.PipelineTemplateContext
 import com.netflix.spinnaker.orca.pipelinetemplate.handler.PipelineTemplateErrorHandler
 import com.netflix.spinnaker.orca.pipelinetemplate.handler.SchemaVersionHandler
 import com.netflix.spinnaker.orca.pipelinetemplate.v2schema.model.V2PipelineTemplate
+import javax.annotation.Nonnull
+import javax.annotation.PostConstruct
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.core.annotation.Order
 import org.springframework.stereotype.Component
-import javax.annotation.Nonnull
-import javax.annotation.PostConstruct
 
 @Component("pipelineTemplatePreprocessor")
 @Order(2)
@@ -59,7 +60,8 @@ class PipelineTemplatePreprocessor
     //
     // We also need to ensure that 'type' and 'schema' are set properly upstream when saving v2 template configs.
     if (pipeline.getOrDefault(V2PipelineTemplate.SCHEMA, null) == V2PipelineTemplate.V2_SCHEMA_VERSION &&
-      pipeline.get("template") != null) {
+      pipeline.get("template") != null
+    ) {
       val templateConfig = HashMap(pipeline)
       templateConfig.remove("trigger") // template configurations don't have a 'trigger' field.
       pipeline.put("config", templateConfig)
@@ -70,8 +72,6 @@ class PipelineTemplatePreprocessor
     if (!request.isTemplatedPipelineRequest) {
       return pipeline
     }
-
-    log.debug("Starting handler chain")
 
     val chain = DefaultHandlerChain()
     val context = GlobalPipelineTemplateContext(chain, request)
@@ -88,7 +88,11 @@ class PipelineTemplatePreprocessor
           throw IrrecoverableConditionException(t)
         }
 
-        log.error("Unexpected error occurred while processing template: ", context.getRequest().getId(), t)
+        // Missing variables is a very common error and not really an exception, just a user forgetting to specify all variables
+        // No point logging anything in this case - it's just noise
+        if (t !is PipelineMissingTemplateVariabledException) {
+          log.error("Unexpected error occurred while processing template: ", context.getRequest().getId(), t)
+        }
         context.getCaughtThrowables().add(t)
         chain.clear()
       }
@@ -101,16 +105,19 @@ class PipelineTemplatePreprocessor
 
     recordRequest(context, !context.getErrors().hasErrors(false))
 
-    log.debug("Handler chain complete")
     return context.getProcessedOutput()
   }
 
   private fun recordRequest(context: PipelineTemplateContext, success: Boolean) {
-    registry.counter(requestsId.withTags(listOf(
-      BasicTag("status", if (success) "success" else "failure"),
-      BasicTag("schema", context.getRequest().schema ?: "unknown"),
-      BasicTag("plan", context.getRequest().plan.toString())
-    ))).increment()
+    registry.counter(
+      requestsId.withTags(
+        listOf(
+          BasicTag("status", if (success) "success" else "failure"),
+          BasicTag("schema", context.getRequest().schema ?: "unknown"),
+          BasicTag("plan", context.getRequest().plan.toString())
+        )
+      )
+    ).increment()
   }
 }
 

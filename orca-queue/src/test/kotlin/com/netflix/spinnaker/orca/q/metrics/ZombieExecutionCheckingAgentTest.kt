@@ -19,13 +19,14 @@ package com.netflix.spinnaker.orca.q.metrics
 import com.netflix.spectator.api.Counter
 import com.netflix.spectator.api.Registry
 import com.netflix.spectator.api.Tag
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.fixture.pipeline
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
 import com.netflix.spinnaker.orca.notifications.NotificationClusterLock
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository.ExecutionCriteria
+import com.netflix.spinnaker.orca.q.ZombieExecutionService
 import com.netflix.spinnaker.q.Activator
 import com.netflix.spinnaker.q.metrics.MonitorableQueue
 import com.netflix.spinnaker.time.fixedClock
@@ -37,6 +38,10 @@ import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyZeroInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Duration
+import java.time.Instant.now
+import java.time.temporal.ChronoUnit.HOURS
+import java.util.Optional
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
 import org.jetbrains.spek.api.dsl.it
@@ -45,10 +50,6 @@ import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
 import org.jetbrains.spek.subject.SubjectSpek
 import rx.Observable.just
 import rx.schedulers.Schedulers
-import java.time.Duration
-import java.time.Instant.now
-import java.time.temporal.ChronoUnit.HOURS
-import java.util.Optional
 
 object ZombieExecutionCheckingAgentTest : SubjectSpek<ZombieExecutionCheckingAgent>({
 
@@ -66,12 +67,15 @@ object ZombieExecutionCheckingAgentTest : SubjectSpek<ZombieExecutionCheckingAge
 
   subject(GROUP) {
     ZombieExecutionCheckingAgent(
-      queue,
+      ZombieExecutionService(
+        repository,
+        queue,
+        clock,
+        Optional.of(Schedulers.immediate())
+      ),
       registry,
-      repository,
       clock,
       conch,
-      Optional.of(Schedulers.immediate()),
       10,
       true,
       10,

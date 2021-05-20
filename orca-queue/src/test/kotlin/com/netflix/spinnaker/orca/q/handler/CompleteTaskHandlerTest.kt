@@ -17,27 +17,30 @@
 package com.netflix.spinnaker.orca.q.handler
 
 import com.netflix.spectator.api.NoopRegistry
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.REDIRECT
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.StageResolver
-import com.netflix.spinnaker.orca.api.SimpleStage
+import com.netflix.spinnaker.orca.DefaultStageResolver
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.REDIRECT
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.TaskExecution
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.events.TaskComplete
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
 import com.netflix.spinnaker.orca.pipeline.DefaultStageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
-import com.netflix.spinnaker.orca.pipeline.model.Task
+import com.netflix.spinnaker.orca.pipeline.model.TaskExecutionImpl
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.q.CompleteStage
 import com.netflix.spinnaker.orca.q.CompleteTask
 import com.netflix.spinnaker.orca.q.RunTask
 import com.netflix.spinnaker.orca.q.SkipStage
+import com.netflix.spinnaker.orca.q.StageDefinitionBuildersProvider
 import com.netflix.spinnaker.orca.q.StartTask
 import com.netflix.spinnaker.orca.q.buildTasks
 import com.netflix.spinnaker.orca.q.get
@@ -70,7 +73,7 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
   val repository: ExecutionRepository = mock()
   val publisher: ApplicationEventPublisher = mock()
   val clock = fixedClock()
-  val stageResolver = StageResolver(emptyList(), emptyList<SimpleStage<Object>>())
+  val stageResolver = DefaultStageResolver(StageDefinitionBuildersProvider(emptyList()))
 
   subject(GROUP) {
     CompleteTaskHandler(queue, repository, DefaultStageDefinitionBuilderFactory(stageResolver), ContextParameterProcessor(), publisher, clock, NoopRegistry())
@@ -78,13 +81,13 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
 
   fun resetMocks() = reset(queue, repository, publisher)
 
-  setOf(SUCCEEDED).forEach { successfulStatus ->
+  setOf(SUCCEEDED, SKIPPED).forEach { successfulStatus ->
     describe("when a task completes with $successfulStatus status") {
       given("the stage contains further tasks") {
         val pipeline = pipeline {
           stage {
             type = multiTaskStage.type
-            multiTaskStage.buildTasks(this)
+            multiTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
         val message = CompleteTask(
@@ -108,33 +111,39 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
         }
 
         it("updates the task state in the stage") {
-          verify(repository).storeStage(check {
-            it.tasks.first().apply {
-              assertThat(status).isEqualTo(successfulStatus)
-              assertThat(endTime).isEqualTo(clock.millis())
+          verify(repository).storeStage(
+            check {
+              it.tasks.first().apply {
+                assertThat(status).isEqualTo(successfulStatus)
+                assertThat(endTime).isEqualTo(clock.millis())
+              }
             }
-          })
+          )
         }
 
         it("runs the next task") {
           verify(queue)
-            .push(StartTask(
-              message.executionType,
-              message.executionId,
-              message.application,
-              message.stageId,
-              "2"
-            ))
+            .push(
+              StartTask(
+                message.executionType,
+                message.executionId,
+                message.application,
+                message.stageId,
+                "2"
+              )
+            )
         }
 
         it("publishes an event") {
-          verify(publisher).publishEvent(check<TaskComplete> {
-            assertThat(it.executionType).isEqualTo(pipeline.type)
-            assertThat(it.executionId).isEqualTo(pipeline.id)
-            assertThat(it.stageId).isEqualTo(message.stageId)
-            assertThat(it.taskId).isEqualTo(message.taskId)
-            assertThat(it.status).isEqualTo(successfulStatus)
-          })
+          verify(publisher).publishEvent(
+            check<TaskComplete> {
+              assertThat(it.executionType).isEqualTo(pipeline.type)
+              assertThat(it.executionId).isEqualTo(pipeline.id)
+              assertThat(it.stage.id).isEqualTo(message.stageId)
+              assertThat(it.task.id).isEqualTo(message.taskId)
+              assertThat(it.task.status).isEqualTo(successfulStatus)
+            }
+          )
         }
       }
 
@@ -142,7 +151,7 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
         val pipeline = pipeline {
           stage {
             type = singleTaskStage.type
-            singleTaskStage.buildTasks(this)
+            singleTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
         val message = CompleteTask(
@@ -166,22 +175,26 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
         }
 
         it("updates the task state in the stage") {
-          verify(repository).storeStage(check {
-            it.tasks.last().apply {
-              assertThat(status).isEqualTo(SUCCEEDED)
-              assertThat(endTime).isEqualTo(clock.millis())
+          verify(repository).storeStage(
+            check {
+              it.tasks.last().apply {
+                assertThat(status).isEqualTo(SUCCEEDED)
+                assertThat(endTime).isEqualTo(clock.millis())
+              }
             }
-          })
+          )
         }
 
         it("emits an event to signal the stage is complete") {
           verify(queue)
-            .push(CompleteStage(
-              message.executionType,
-              message.executionId,
-              message.application,
-              message.stageId
-            ))
+            .push(
+              CompleteStage(
+                message.executionType,
+                message.executionId,
+                message.application,
+                message.stageId
+              )
+            )
         }
       }
 
@@ -190,7 +203,7 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
           stage {
             refId = "1"
             type = rollingPushStage.type
-            rollingPushStage.buildTasks(this)
+            rollingPushStage.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -222,15 +235,19 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
           }
 
           it("repeats the loop") {
-            verify(queue).push(check<StartTask> {
-              assertThat(it.taskId).isEqualTo("2")
-            })
+            verify(queue).push(
+              check<StartTask> {
+                assertThat(it.taskId).isEqualTo("2")
+              }
+            )
           }
 
           it("resets the status of the loop tasks") {
-            verify(repository).storeStage(check {
-              assertThat(it.tasks[1..3].map(Task::getStatus)).allMatch { it == NOT_STARTED }
-            })
+            verify(repository).storeStage(
+              check {
+                assertThat(it.tasks[1..3].map(TaskExecution::getStatus)).allMatch { it == NOT_STARTED }
+              }
+            )
           }
 
           it("does not publish an event") {
@@ -241,12 +258,12 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
     }
   }
 
-  setOf(TERMINAL, CANCELED).forEach { status ->
+  setOf(TERMINAL, CANCELED, STOPPED).forEach { status ->
     describe("when a task completes with $status status") {
       val pipeline = pipeline {
         stage {
           type = multiTaskStage.type
-          multiTaskStage.buildTasks(this)
+          multiTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
         }
       }
       val message = CompleteTask(
@@ -270,21 +287,25 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
       }
 
       it("updates the task state in the stage") {
-        verify(repository).storeStage(check {
-          it.tasks.first().apply {
-            assertThat(status).isEqualTo(status)
-            assertThat(endTime).isEqualTo(clock.millis())
+        verify(repository).storeStage(
+          check {
+            it.tasks.first().apply {
+              assertThat(status).isEqualTo(status)
+              assertThat(endTime).isEqualTo(clock.millis())
+            }
           }
-        })
+        )
       }
 
       it("fails the stage") {
-        verify(queue).push(CompleteStage(
-          message.executionType,
-          message.executionId,
-          message.application,
-          message.stageId
-        ))
+        verify(queue).push(
+          CompleteStage(
+            message.executionType,
+            message.executionId,
+            message.application,
+            message.stageId
+          )
+        )
       }
 
       it("does not run the next task") {
@@ -292,20 +313,22 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<TaskComplete> {
-          assertThat(it.executionType).isEqualTo(pipeline.type)
-          assertThat(it.executionId).isEqualTo(pipeline.id)
-          assertThat(it.stageId).isEqualTo(message.stageId)
-          assertThat(it.taskId).isEqualTo(message.taskId)
-          assertThat(it.status).isEqualTo(status)
-        })
+        verify(publisher).publishEvent(
+          check<TaskComplete> {
+            assertThat(it.executionType).isEqualTo(pipeline.type)
+            assertThat(it.executionId).isEqualTo(pipeline.id)
+            assertThat(it.stage.id).isEqualTo(message.stageId)
+            assertThat(it.task.id).isEqualTo(message.taskId)
+            assertThat(it.task.status).isEqualTo(status)
+          }
+        )
       }
     }
   }
 
   describe("when a task should complete parent stage") {
-    val task = fun(isStageEnd: Boolean): Task {
-      val task = Task()
+    val task = fun(isStageEnd: Boolean): TaskExecution {
+      val task = TaskExecutionImpl()
       task.isStageEnd = isStageEnd
       return task
     }
@@ -328,7 +351,7 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
         stage {
           refId = "1"
           type = singleTaskStage.type
-          singleTaskStage.buildTasks(this)
+          singleTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
           context["manualSkip"] = true
         }
       }
@@ -362,13 +385,13 @@ object CompleteTaskHandlerTest : SubjectSpek<CompleteTaskHandler>({
         stage {
           refId = "1"
           type = singleTaskStage.type
-          singleTaskStage.buildTasks(this)
+          singleTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
           context["manualSkip"] = true
 
           stage {
             refId = "1<1"
             type = singleTaskStage.type
-            singleTaskStage.buildTasks(this)
+            singleTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
       }

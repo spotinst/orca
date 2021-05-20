@@ -21,13 +21,13 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.frigga.Names
 import com.netflix.spinnaker.kork.artifacts.model.Artifact
 import com.netflix.spinnaker.moniker.Moniker
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.RetryableTask
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.RetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.OortService
 import com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.support.Location
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.util.RegionCollector
 import groovy.transform.Canonical
 import groovy.util.logging.Slf4j
@@ -92,6 +92,7 @@ class FindImageFromClusterTask extends AbstractCloudProviderAwareTask implements
     List<String> zones
     List<String> namespaces
     Boolean onlyEnabled = true
+    Boolean skipRegionDetection = false
     Boolean resolveMissingLocations
     SelectionStrategy selectionStrategy = SelectionStrategy.NEWEST
     String imageNamePattern
@@ -109,7 +110,7 @@ class FindImageFromClusterTask extends AbstractCloudProviderAwareTask implements
   }
 
   @Override
-  TaskResult execute(Stage stage) {
+  TaskResult execute(StageExecution stage) {
     String cloudProvider = getCloudProvider(stage)
     String account = getCredentials(stage)
     FindImageConfiguration config = stage.mapTo(FindImageConfiguration)
@@ -124,7 +125,7 @@ class FindImageFromClusterTask extends AbstractCloudProviderAwareTask implements
     Map<Location, String> imageIds = [:]
     Set<String> inferredRegions = new HashSet<>()
 
-    if (cloudProvider == 'aws') {
+    if (cloudProvider == 'aws' && !config.skipRegionDetection) {
       // Supplement config with regions from subsequent deploy/canary stages:
       def deployRegions = regionCollector.getRegionsFromChildStages(stage)
 
@@ -294,11 +295,15 @@ class FindImageFromClusterTask extends AbstractCloudProviderAwareTask implements
       return artifact
     }.flatten()
 
-    return TaskResult.builder(ExecutionStatus.SUCCEEDED).context([
-      amiDetails: deploymentDetails,
-      artifacts: artifacts
-    ]).outputs([
-      deploymentDetails: deploymentDetails
+    Map<String, Object> context = [amiDetails: deploymentDetails, artifacts: artifacts]
+    if (cloudProvider == "aws" && config.regions) {
+      context.put("regions", config.regions + inferredRegions)
+    }
+    return TaskResult.builder(ExecutionStatus.SUCCEEDED).context(
+      context
+    ).outputs([
+      deploymentDetails: deploymentDetails,
+      inferredRegions: inferredRegions
     ]).build()
   }
 
@@ -317,6 +322,14 @@ class FindImageFromClusterTask extends AbstractCloudProviderAwareTask implements
 
           imageSummaries[location] = [
             mkDeploymentDetail((String) image.imageName, (String) image.amis[location.value][0], deploymentDetailTemplate, config)
+          ]
+        }
+        //Docker registry to deployment detail conversion
+        else if (imageSummaries[location] == null && image.repository != null && image.tag != null) {
+          String imageId = (String) image.repository + ":" + (String) image.tag
+          imageSummaries[location] = [
+              //In the context of Spinnaker Docker images the imageId and imageName are the same
+              mkDeploymentDetail(imageId, imageId, deploymentDetailTemplate, config)
           ]
         }
       }

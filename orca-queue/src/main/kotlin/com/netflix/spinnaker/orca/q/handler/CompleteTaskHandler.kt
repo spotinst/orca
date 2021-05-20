@@ -18,17 +18,17 @@ package com.netflix.spinnaker.orca.q.handler
 
 import com.netflix.spectator.api.BasicTag
 import com.netflix.spectator.api.Registry
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.REDIRECT
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.REDIRECT
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.TaskExecution
 import com.netflix.spinnaker.orca.events.TaskComplete
 import com.netflix.spinnaker.orca.ext.isManuallySkipped
 import com.netflix.spinnaker.orca.ext.nextTask
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.Task
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.q.CompleteStage
@@ -39,11 +39,12 @@ import com.netflix.spinnaker.orca.q.StartTask
 import com.netflix.spinnaker.orca.q.get
 import com.netflix.spinnaker.orca.q.metrics.MetricsTagHelper
 import com.netflix.spinnaker.q.Queue
+import java.lang.Exception
+import java.time.Clock
+import java.util.concurrent.TimeUnit
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
-import java.time.Clock
-import java.util.concurrent.TimeUnit
 
 @Component
 class CompleteTaskHandler(
@@ -87,7 +88,7 @@ class CompleteTaskHandler(
     }
   }
 
-  fun shouldCompleteStage(task: Task, status: ExecutionStatus, originalStatus: ExecutionStatus?): Boolean {
+  fun shouldCompleteStage(task: TaskExecution, status: ExecutionStatus, originalStatus: ExecutionStatus?): Boolean {
     if (task.isStageEnd) {
       // last task in the stage
       return true
@@ -98,13 +99,13 @@ class CompleteTaskHandler(
       return false
     }
 
-    // the task was not successful and _should not_ run subsequent tasks
-    return status != SUCCEEDED
+    // the task _should not_ run subsequent tasks
+    return status.isHalt
   }
 
   override val messageType = CompleteTask::class.java
 
-  private fun Stage.handleRedirect() {
+  private fun StageExecution.handleRedirect() {
     tasks.let { tasks ->
       val start = tasks.indexOfFirst { it.isLoopStart }
       val end = tasks.indexOfLast { it.isLoopEnd }
@@ -117,18 +118,22 @@ class CompleteTaskHandler(
     }
   }
 
-  private fun trackResult(stage: Stage, taskModel: com.netflix.spinnaker.orca.pipeline.model.Task, status: ExecutionStatus) {
-    val commonTags = MetricsTagHelper.commonTags(stage, taskModel, status)
-    val detailedTags = MetricsTagHelper.detailedTaskTags(stage, taskModel, status)
+  private fun trackResult(stage: StageExecution, taskModel: TaskExecution, status: ExecutionStatus) {
+    try {
+      val commonTags = MetricsTagHelper.commonTags(stage, taskModel, status)
+      val detailedTags = MetricsTagHelper.detailedTaskTags(stage, taskModel, status)
 
-    // we are looking at the time it took to complete the whole execution, not just one invocation
-    val elapsedMillis = clock.millis() - (taskModel.startTime ?: 0)
+      // we are looking at the time it took to complete the whole execution, not just one invocation
+      val elapsedMillis = clock.millis() - (taskModel.startTime ?: 0)
 
-    hashMapOf(
-      "task.completions.duration" to commonTags + BasicTag("application", stage.execution.application),
-      "task.completions.duration.withType" to commonTags + detailedTags
-    ).forEach {
-      name, tags -> registry.timer(name, tags).record(elapsedMillis, TimeUnit.MILLISECONDS)
+      hashMapOf(
+        "task.completions.duration" to commonTags + BasicTag("application", stage.execution.application),
+        "task.completions.duration.withType" to commonTags + detailedTags
+      ).forEach { name, tags ->
+        registry.timer(name, tags).record(elapsedMillis, TimeUnit.MILLISECONDS)
+      }
+    } catch (e: Exception) {
+      log.warn("Failed to track result for stage: ${stage.id}, task: ${taskModel.id}", e)
     }
   }
 }

@@ -15,13 +15,10 @@
  */
 package com.netflix.spinnaker.orca.qos
 
-import com.netflix.appinfo.InstanceInfo.InstanceStatus.DOWN
-import com.netflix.appinfo.InstanceInfo.InstanceStatus.UP
-import com.netflix.discovery.StatusChangeEvent
 import com.netflix.spectator.api.NoopRegistry
-import com.netflix.spinnaker.kork.eureka.RemoteStatusChangedEvent
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.fixture.pipeline
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.notifications.AlwaysUnlockedNotificationClusterLock
 import com.netflix.spinnaker.orca.pipeline.ExecutionLauncher
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.nhaarman.mockito_kotlin.any
@@ -31,6 +28,7 @@ import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyNoMoreInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
 import org.jetbrains.spek.api.dsl.it
@@ -45,10 +43,7 @@ class DefaultExecutionPromoterTest : SubjectSpek<DefaultExecutionPromoter>({
   val policy: PromotionPolicy = mock()
 
   subject(CachingMode.GROUP) {
-    DefaultExecutionPromoter(executionLauncher, executionRepository, listOf(policy), NoopRegistry())
-      .also {
-        it.onApplicationEvent(RemoteStatusChangedEvent(StatusChangeEvent(DOWN, UP)))
-      }
+    DefaultExecutionPromoter(executionLauncher, executionRepository, listOf(policy), NoopRegistry(), 5000, AlwaysUnlockedNotificationClusterLock())
   }
 
   fun resetMocks() = reset(executionRepository, policy)
@@ -77,11 +72,13 @@ class DefaultExecutionPromoterTest : SubjectSpek<DefaultExecutionPromoter>({
       afterGroup(::resetMocks)
 
       on("promote schedule") {
-        subject.promote()
+        subject.tick()
 
         it("promotes all policy-selected candidate executions via status update") {
-          verify(executionRepository).updateStatus(execution1.type, execution1.id, ExecutionStatus.NOT_STARTED)
-          verify(executionRepository).updateStatus(execution2.type, execution2.id, ExecutionStatus.NOT_STARTED)
+          assertThat(execution1.status).isEqualTo(NOT_STARTED)
+          assertThat(execution2.status).isEqualTo(NOT_STARTED)
+          verify(executionRepository).updateStatus(execution1)
+          verify(executionRepository).updateStatus(execution2)
         }
 
         it("starts the executions immediately") {

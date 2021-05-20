@@ -16,10 +16,10 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.PAUSED
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.PAUSED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.PauseStage
 import com.netflix.spinnaker.orca.q.buildBeforeStages
@@ -78,10 +78,12 @@ object PauseStageHandlerTest : SubjectSpek<PauseStageHandler>({
     }
 
     it("updates the stage state") {
-      verify(repository).storeStage(check {
-        assertThat(it.status).isEqualTo(PAUSED)
-        assertThat(it.endTime).isNull()
-      })
+      verify(repository).storeStage(
+        check {
+          assertThat(it.status).isEqualTo(PAUSED)
+          assertThat(it.endTime).isNull()
+        }
+      )
     }
 
     it("does not take any further action") {

@@ -16,10 +16,11 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.PAUSED
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.PAUSED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.PauseStage
 import com.netflix.spinnaker.orca.q.PauseTask
@@ -54,7 +55,7 @@ object PauseTaskHandlerTest : SubjectSpek<PauseTaskHandler>({
       application = "foo"
       stage {
         type = multiTaskStage.type
-        multiTaskStage.buildTasks(this)
+        multiTaskStage.buildTasks(this, NoOpTaskImplementationResolver())
       }
     }
     val message = PauseTask(pipeline.type, pipeline.id, "foo", pipeline.stages.first().id, "1")
@@ -70,12 +71,14 @@ object PauseTaskHandlerTest : SubjectSpek<PauseTaskHandler>({
     }
 
     it("updates the task state in the stage") {
-      verify(repository).storeStage(check {
-        it.tasks.first().apply {
-          assertThat(status).isEqualTo(PAUSED)
-          assertThat(endTime).isNull()
+      verify(repository).storeStage(
+        check {
+          it.tasks.first().apply {
+            assertThat(status).isEqualTo(PAUSED)
+            assertThat(endTime).isNull()
+          }
         }
-      })
+      )
     }
 
     it("pauses the stage") {

@@ -16,15 +16,15 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.events.StageComplete
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CompleteExecution
 import com.netflix.spinnaker.orca.q.RunTask
@@ -118,10 +118,12 @@ object SkipStageHandlerTest : SubjectSpek<SkipStageHandler>({
       }
 
       it("updates the stage state") {
-        verify(repository).storeStage(check {
-          assertThat(it.status).isEqualTo(SKIPPED)
-          assertThat(it.endTime).isEqualTo(clock.millis())
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.status).isEqualTo(SKIPPED)
+            assertThat(it.endTime).isEqualTo(clock.millis())
+          }
+        )
       }
 
       it("completes the execution") {
@@ -133,12 +135,14 @@ object SkipStageHandlerTest : SubjectSpek<SkipStageHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<StageComplete> {
-          assertThat(it.executionType).isEqualTo(pipeline.type)
-          assertThat(it.executionId).isEqualTo(pipeline.id)
-          assertThat(it.stageId).isEqualTo(message.stageId)
-          assertThat(it.status).isEqualTo(SKIPPED)
-        })
+        verify(publisher).publishEvent(
+          check<StageComplete> {
+            assertThat(it.executionType).isEqualTo(pipeline.type)
+            assertThat(it.executionId).isEqualTo(pipeline.id)
+            assertThat(it.stageId).isEqualTo(message.stageId)
+            assertThat(it.status).isEqualTo(SKIPPED)
+          }
+        )
       }
     }
 
@@ -169,19 +173,23 @@ object SkipStageHandlerTest : SubjectSpek<SkipStageHandler>({
       }
 
       it("updates the stage state") {
-        verify(repository).storeStage(check {
-          assertThat(it.status).isEqualTo(SKIPPED)
-          assertThat(it.endTime).isEqualTo(clock.millis())
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.status).isEqualTo(SKIPPED)
+            assertThat(it.endTime).isEqualTo(clock.millis())
+          }
+        )
       }
 
       it("runs the next stage") {
-        verify(queue).push(StartStage(
-          message.executionType,
-          message.executionId,
-          "foo",
-          pipeline.stages.last().id
-        ))
+        verify(queue).push(
+          StartStage(
+            message.executionType,
+            message.executionId,
+            "foo",
+            pipeline.stages.last().id
+          )
+        )
       }
 
       it("does not run any tasks") {

@@ -16,40 +16,43 @@
 
 package com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup
 
-import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.clouddriver.ForceCacheRefreshAware
 import com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.support.TargetServerGroupLinearStageSupport
 import com.netflix.spinnaker.orca.clouddriver.tasks.DetermineHealthProvidersTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.DisableServerGroupTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.ServerGroupCacheForceRefreshTask
+import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.WaitForDisabledServerGroupTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.WaitForRequiredInstancesDownTask
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
 import groovy.transform.CompileStatic
 import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.core.env.Environment
 import org.springframework.stereotype.Component
 
 @Component
 @CompileStatic
-class DisableServerGroupStage extends TargetServerGroupLinearStageSupport {
+class DisableServerGroupStage extends TargetServerGroupLinearStageSupport implements ForceCacheRefreshAware {
   static final String PIPELINE_CONFIG_TYPE = "disableServerGroup"
 
-  private final DynamicConfigService dynamicConfigService;
+  private final Environment environment
 
   @Autowired
-  DisableServerGroupStage(DynamicConfigService dynamicConfigService) {
-    this.dynamicConfigService = dynamicConfigService;
+  DisableServerGroupStage(Environment environment) {
+    this.environment = environment
   }
 
   @Override
-  protected void taskGraphInternal(Stage stage, TaskNode.Builder builder) {
+  protected void taskGraphInternal(StageExecution stage, TaskNode.Builder builder) {
     builder
       .withTask("determineHealthProviders", DetermineHealthProvidersTask)
       .withTask("disableServerGroup", DisableServerGroupTask)
       .withTask("monitorServerGroup", MonitorKatoTask)
       .withTask("waitForDownInstances", WaitForRequiredInstancesDownTask)
+      .withTask("waitForServerGroupDisabled", WaitForDisabledServerGroupTask)
 
-    if (isForceCacheRefreshEnabled(dynamicConfigService)) {
+    if (isForceCacheRefreshEnabled(environment)) {
       builder.withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask)
     }
   }

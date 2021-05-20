@@ -18,7 +18,9 @@ package com.netflix.spinnaker.config
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.spectator.api.Registry
+import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.kork.jedis.JedisDriverProperties
+import com.netflix.spinnaker.kork.jedis.JedisPoolFactory
 import com.netflix.spinnaker.orca.q.QueueShovel
 import com.netflix.spinnaker.q.Activator
 import com.netflix.spinnaker.q.metrics.EventPublisher
@@ -27,6 +29,8 @@ import com.netflix.spinnaker.q.redis.AbstractRedisQueue
 import com.netflix.spinnaker.q.redis.RedisClusterQueue
 import com.netflix.spinnaker.q.redis.RedisQueue
 import com.netflix.spinnaker.q.sql.SqlQueue
+import java.time.Clock
+import java.util.Optional
 import org.apache.commons.pool2.impl.GenericObjectPoolConfig
 import org.jooq.DSLContext
 import org.springframework.beans.factory.annotation.Value
@@ -36,9 +40,6 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
 import org.springframework.context.annotation.Bean
 import org.springframework.context.annotation.Configuration
 import redis.clients.jedis.JedisCluster
-import java.time.Clock
-import java.util.Optional
-import com.netflix.spinnaker.kork.jedis.JedisPoolFactory
 
 @Configuration
 @EnableConfigurationProperties(RedisQueueProperties::class, SqlQueueProperties::class)
@@ -47,7 +48,7 @@ class SqlRedisQueueShovelConfiguration {
 
   @Bean
   @ConditionalOnBean(SqlQueue::class)
-  @ConditionalOnProperty(value = ["redis.cluster-enabled"], havingValue = "false", matchIfMissing = true)
+  @ConditionalOnProperty(value = ["queue.shovel.kind"], havingValue = "redis-to-sql")
   fun redisToSqlQueueShovel(
     @Value("\${redis.connection:redis://localhost:6379}") mainConnection: String,
     @Value("\${redis.timeout:2000}") timeout: Int,
@@ -59,7 +60,8 @@ class SqlRedisQueueShovelConfiguration {
     serializationMigrator: Optional<SerializationMigrator>,
     redisQueueProperties: RedisQueueProperties,
     registry: Registry,
-    discoveryActivator: Activator
+    discoveryActivator: Activator,
+    dynamicConfigService: DynamicConfigService
   ): QueueShovel {
     val jedisPool = JedisPoolFactory(registry).build(
       "previousQueue",
@@ -68,7 +70,8 @@ class SqlRedisQueueShovelConfiguration {
         timeoutMs = timeout
         poolConfig = redisPoolConfig
       },
-      redisPoolConfig)
+      redisPoolConfig
+    )
 
     val previousQueue = RedisQueue(
       queueName = redisQueueProperties.queueName,
@@ -77,18 +80,22 @@ class SqlRedisQueueShovelConfiguration {
       deadMessageHandlers = emptyList(),
       publisher = publisher,
       mapper = mapper,
-      serializationMigrator = serializationMigrator)
+      serializationMigrator = serializationMigrator
+    )
 
     return QueueShovel(
       queue = queue,
       previousQueue = previousQueue,
       registry = registry,
-      activator = discoveryActivator)
+      activator = discoveryActivator,
+      config = dynamicConfigService,
+      executionRepository = null
+    )
   }
 
   @Bean
   @ConditionalOnBean(SqlQueue::class)
-  @ConditionalOnProperty(value = ["redis.cluster-enabled"], havingValue = "true", matchIfMissing = false)
+  @ConditionalOnProperty(value = ["queue.shovel.kind"], havingValue = "redis-cluster-to-sql")
   fun redisClusterToSqlQueueShovel(
     queue: SqlQueue,
     cluster: JedisCluster,
@@ -98,7 +105,8 @@ class SqlRedisQueueShovelConfiguration {
     serializationMigrator: Optional<SerializationMigrator>,
     redisQueueProperties: RedisQueueProperties,
     registry: Registry,
-    discoveryActivator: Activator
+    discoveryActivator: Activator,
+    dynamicConfigService: DynamicConfigService
   ): QueueShovel {
     val previousQueue = RedisClusterQueue(
       queueName = redisQueueProperties.queueName,
@@ -114,7 +122,10 @@ class SqlRedisQueueShovelConfiguration {
       queue = queue,
       previousQueue = previousQueue,
       registry = registry,
-      activator = discoveryActivator)
+      activator = discoveryActivator,
+      config = dynamicConfigService,
+      executionRepository = null
+    )
   }
 
   /**
@@ -123,6 +134,7 @@ class SqlRedisQueueShovelConfiguration {
    */
   @Bean
   @ConditionalOnBean(AbstractRedisQueue::class)
+  @ConditionalOnProperty(value = ["queue.shovel.kind"], havingValue = "sql-to-redis")
   fun sqlToRedisQueueShovel(
     queue: AbstractRedisQueue,
     jooq: DSLContext,
@@ -132,7 +144,8 @@ class SqlRedisQueueShovelConfiguration {
     serializationMigrator: Optional<SerializationMigrator>,
     sqlQueueProperties: SqlQueueProperties,
     registry: Registry,
-    discoveryActivator: Activator
+    discoveryActivator: Activator,
+    dynamicConfigService: DynamicConfigService
   ): QueueShovel {
     val previousQueue = SqlQueue(
       queueName = sqlQueueProperties.queueName,
@@ -144,12 +157,16 @@ class SqlRedisQueueShovelConfiguration {
       serializationMigrator = serializationMigrator,
       deadMessageHandlers = emptyList(),
       publisher = publisher,
-      sqlRetryProperties = sqlQueueProperties.retries)
+      sqlRetryProperties = sqlQueueProperties.retries
+    )
 
     return QueueShovel(
       queue = queue,
       previousQueue = previousQueue,
       registry = registry,
-      activator = discoveryActivator)
+      activator = discoveryActivator,
+      config = dynamicConfigService,
+      executionRepository = null
+    )
   }
 }

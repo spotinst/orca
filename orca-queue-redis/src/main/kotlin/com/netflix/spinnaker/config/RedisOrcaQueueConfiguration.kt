@@ -20,7 +20,7 @@ import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.module.SimpleModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
 import com.netflix.spinnaker.orca.TaskResolver
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
 import com.netflix.spinnaker.orca.q.migration.ExecutionTypeDeserializer
 import com.netflix.spinnaker.orca.q.migration.OrcaToKeikoSerializationMigrator
 import com.netflix.spinnaker.orca.q.migration.TaskTypeDeserializer
@@ -31,6 +31,8 @@ import com.netflix.spinnaker.q.redis.RedisClusterDeadMessageHandler
 import com.netflix.spinnaker.q.redis.RedisClusterQueue
 import com.netflix.spinnaker.q.redis.RedisDeadMessageHandler
 import com.netflix.spinnaker.q.redis.RedisQueue
+import java.time.Clock
+import java.util.Optional
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty
@@ -41,15 +43,14 @@ import org.springframework.context.annotation.Primary
 import redis.clients.jedis.Jedis
 import redis.clients.jedis.JedisCluster
 import redis.clients.jedis.util.Pool
-import java.time.Clock
-import java.util.Optional
 
 @Configuration
 @EnableConfigurationProperties(ObjectMapperSubtypeProperties::class)
 @ConditionalOnProperty(
   value = ["keiko.queue.redis.enabled"],
   havingValue = "true",
-  matchIfMissing = true)
+  matchIfMissing = true
+)
 class RedisOrcaQueueConfiguration : RedisQueueConfiguration() {
 
   @Autowired
@@ -67,10 +68,12 @@ class RedisOrcaQueueConfiguration : RedisQueueConfiguration() {
       )
       disable(FAIL_ON_UNKNOWN_PROPERTIES)
 
-      SpringObjectMapperConfigurer(objectMapperSubtypeProperties.apply {
-        messagePackages += listOf("com.netflix.spinnaker.orca.q")
-        attributePackages += listOf("com.netflix.spinnaker.orca.q")
-      }).registerSubtypes(this)
+      SpringObjectMapperConfigurer(
+        objectMapperSubtypeProperties.apply {
+          messagePackages += listOf("com.netflix.spinnaker.orca.q")
+          attributePackages += listOf("com.netflix.spinnaker.orca.q")
+        }
+      ).registerSubtypes(this)
     }
   }
 

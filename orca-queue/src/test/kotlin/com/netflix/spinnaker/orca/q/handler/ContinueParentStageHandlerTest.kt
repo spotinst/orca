@@ -16,16 +16,17 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner.STAGE_AFTER
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner.STAGE_BEFORE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.ext.beforeStages
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner.STAGE_AFTER
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner.STAGE_BEFORE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CompleteStage
 import com.netflix.spinnaker.orca.q.ContinueParentStage
@@ -44,13 +45,13 @@ import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyZeroInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Duration
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
 import org.jetbrains.spek.api.dsl.it
 import org.jetbrains.spek.api.dsl.on
 import org.jetbrains.spek.api.lifecycle.CachingMode
 import org.jetbrains.spek.subject.SubjectSpek
-import java.time.Duration
 
 object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>({
 
@@ -72,7 +73,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
             refId = "1"
             type = stageWithSyntheticBefore.type
             stageWithSyntheticBefore.buildBeforeStages(this)
-            stageWithSyntheticBefore.buildTasks(this)
+            stageWithSyntheticBefore.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -101,7 +102,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
             refId = "1"
             type = stageWithSyntheticBefore.type
             stageWithSyntheticBefore.buildBeforeStages(this)
-            stageWithSyntheticBefore.buildTasks(this)
+            stageWithSyntheticBefore.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -130,7 +131,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
             refId = "1"
             type = stageWithSyntheticBefore.type
             stageWithSyntheticBefore.buildBeforeStages(this)
-            stageWithSyntheticBefore.buildTasks(this)
+            stageWithSyntheticBefore.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -180,7 +181,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
             refId = "1"
             type = stageWithSyntheticBeforeAndNoTasks.type
             stageWithSyntheticBeforeAndNoTasks.buildBeforeStages(this)
-            stageWithSyntheticBeforeAndNoTasks.buildTasks(this)
+            stageWithSyntheticBeforeAndNoTasks.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -211,7 +212,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
           stage {
             refId = "1"
             type = stageWithParallelAfter.type
-            stageWithParallelAfter.buildTasks(this)
+            stageWithParallelAfter.buildTasks(this, NoOpTaskImplementationResolver())
             stageWithParallelAfter.buildAfterStages(this)
           }
         }
@@ -240,7 +241,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
           stage {
             refId = "1"
             type = stageWithParallelAfter.type
-            stageWithParallelAfter.buildTasks(this)
+            stageWithParallelAfter.buildTasks(this, NoOpTaskImplementationResolver())
             stageWithParallelAfter.buildAfterStages(this)
           }
         }
@@ -269,7 +270,7 @@ object ContinueParentStageHandlerTest : SubjectSpek<ContinueParentStageHandler>(
           stage {
             refId = "1"
             type = stageWithParallelAfter.type
-            stageWithParallelAfter.buildTasks(this)
+            stageWithParallelAfter.buildTasks(this, NoOpTaskImplementationResolver())
             stageWithParallelAfter.buildAfterStages(this)
           }
         }

@@ -16,20 +16,20 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilderFactory
 import com.netflix.spinnaker.orca.pipeline.model.PipelineTrigger
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.RestartStage
 import com.netflix.spinnaker.orca.q.StartStage
 import com.netflix.spinnaker.orca.q.pending.PendingExecutionService
 import com.netflix.spinnaker.q.Queue
+import java.time.Clock
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.stereotype.Component
-import java.time.Clock
 
 @Component
 class RestartStageHandler(
@@ -60,19 +60,25 @@ class RestartStageHandler(
           topStage.addRestartDetails(message.user)
           topStage.reset()
           restartParentPipelineIfNeeded(message, topStage)
-          repository.updateStatus(topStage.execution.type, topStage.execution.id, RUNNING)
+          topStage.execution.updateStatus(RUNNING)
+          repository.updateStatus(topStage.execution)
           queue.push(StartStage(startMessage))
         }
       }
     }
   }
 
-  private fun restartParentPipelineIfNeeded(message: RestartStage, topStage: Stage) {
+  private fun restartParentPipelineIfNeeded(message: RestartStage, topStage: StageExecution) {
     if (topStage.execution.trigger !is PipelineTrigger) {
       return
     }
 
     val trigger = topStage.execution.trigger as PipelineTrigger
+    if (trigger.parentPipelineStageId == null) {
+      // Must've been triggered by dependent pipeline, we don't restart those
+      return
+    }
+
     // We have a copy of the parent execution, not the live one. So we retrieve the live one.
     val parentExecution = repository.retrieve(trigger.parentExecution.type, trigger.parentExecution.id)
 
@@ -91,11 +97,11 @@ class RestartStageHandler(
   /**
    * Inform the parent stage when it restarts that the child is already running
    */
-  private fun Stage.addSkipRestart() {
+  private fun StageExecution.addSkipRestart() {
     context["_skipPipelineRestart"] = true
   }
 
-  private fun Stage.addRestartDetails(user: String?) {
+  private fun StageExecution.addRestartDetails(user: String?) {
     context["restartDetails"] = mapOf(
       "restartedBy" to (user ?: "anonymous"),
       "restartTime" to clock.millis(),
@@ -103,7 +109,7 @@ class RestartStageHandler(
     )
   }
 
-  private fun Stage.reset() {
+  private fun StageExecution.reset() {
     if (status.isComplete) {
       status = NOT_STARTED
       startTime = null
@@ -118,7 +124,7 @@ class RestartStageHandler(
     downstreamStages().forEach { it.reset() }
   }
 
-  private fun Stage.removeSynthetics() {
+  private fun StageExecution.removeSynthetics() {
     execution
       .stages
       .filter { it.parentStageId == id }

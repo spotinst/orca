@@ -17,11 +17,12 @@
 
 package com.netflix.spinnaker.orca.webhook.pipeline
 
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
 import com.netflix.spinnaker.orca.webhook.config.WebhookProperties
 import com.netflix.spinnaker.orca.webhook.service.WebhookService
+import com.netflix.spinnaker.orca.webhook.tasks.MonitorWebhookTask
 import org.springframework.http.HttpHeaders
 import org.springframework.http.HttpMethod
 import spock.lang.Specification
@@ -31,13 +32,14 @@ class PreconfiguredWebhookStageSpec extends Specification {
 
   def webhookService = Mock(WebhookService)
   def builder = new TaskNode.Builder()
+  MonitorWebhookTask monitorWebhookTask = Mock(MonitorWebhookTask)
 
   @Subject
-  preconfiguredWebhookStage = new PreconfiguredWebhookStage(webhookService, false, null)
+  preconfiguredWebhookStage = new PreconfiguredWebhookStage(webhookService, null, monitorWebhookTask)
 
   def "Context should be taken from PreconfiguredWebhookProperties"() {
     given:
-    def stage = new Stage(Execution.newPipeline("orca"), "webhook_1", [:])
+    def stage = new StageExecutionImpl(PipelineExecutionImpl.newPipeline("orca"), "webhook_1", [:])
 
     when:
     preconfiguredWebhookStage.taskGraph(stage, builder)
@@ -70,7 +72,7 @@ class PreconfiguredWebhookStageSpec extends Specification {
 
   def "Existing context should be preserved"() {
     given:
-    def stage = new Stage(Execution.newPipeline("orca"), "webhook_1", [
+    def stage = new StageExecutionImpl(PipelineExecutionImpl.newPipeline("orca"), "webhook_1", [
       url: "a",
       customHeaders: ["header": ["value1"]],
       method: HttpMethod.POST,
