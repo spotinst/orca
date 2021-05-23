@@ -20,6 +20,7 @@ import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
 import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
 import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
 import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.clouddriver.ForceCacheRefreshAware
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.instance.WaitForUpInstancesTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.providers.spot.DeployElastigroupTask
@@ -32,7 +33,7 @@ import javax.annotation.Nonnull
 
 @Slf4j
 @Component
-class DeployElastigroupStage implements StageDefinitionBuilder {
+class DeployElastigroupStage implements StageDefinitionBuilder, ForceCacheRefreshAware {
   public static final String PIPELINE_CONFIG_TYPE = "deployElastigroup";
 
   @Autowired
