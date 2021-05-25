@@ -16,7 +16,7 @@
 
 package com.netflix.spinnaker.orca.notifications.scheduling;
 
-import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.ORCHESTRATION;
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.ORCHESTRATION;
 import static java.lang.String.format;
 import static java.time.temporal.ChronoUnit.DAYS;
 import static java.util.Comparator.comparing;
@@ -25,9 +25,9 @@ import com.google.common.annotations.VisibleForTesting;
 import com.netflix.spectator.api.Id;
 import com.netflix.spectator.api.LongTaskTimer;
 import com.netflix.spectator.api.Registry;
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution;
 import com.netflix.spinnaker.orca.notifications.AbstractPollingNotificationAgent;
 import com.netflix.spinnaker.orca.notifications.NotificationClusterLock;
-import com.netflix.spinnaker.orca.pipeline.model.Execution;
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository;
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository.ExecutionCriteria;
 import java.time.Instant;
@@ -42,9 +42,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnExpression;
 import org.springframework.stereotype.Component;
 import rx.Observable;
-import rx.Scheduler;
 import rx.functions.Func1;
-import rx.schedulers.Schedulers;
 
 @Component
 @ConditionalOnExpression(
@@ -54,15 +52,13 @@ public class TopApplicationExecutionCleanupPollingNotificationAgent
 
   private final Logger log = LoggerFactory.getLogger(getClass());
 
-  private Scheduler scheduler = Schedulers.io();
-
-  private Func1<Execution, Boolean> filter =
-      (Execution execution) ->
+  private Func1<? super PipelineExecution, Boolean> filter =
+      (PipelineExecution execution) ->
           execution.getStatus().isComplete()
               || Instant.ofEpochMilli(execution.getBuildTime())
                   .isBefore(Instant.now().minus(31, DAYS));
-  private Func1<Execution, Map> mapper =
-      (Execution execution) -> {
+  private Func1<? super PipelineExecution, ? extends Map> mapper =
+      (PipelineExecution execution) -> {
         Map<String, Object> builder = new HashMap<>();
         builder.put("id", execution.getId());
         builder.put("startTime", execution.getStartTime());
@@ -138,8 +134,9 @@ public class TopApplicationExecutionCleanupPollingNotificationAgent
     }
   }
 
-  private void cleanup(Observable<Execution> observable, String application, String type) {
-    List<Map> executions = observable.filter(filter).map(mapper).toList().toBlocking().single();
+  private void cleanup(Observable<PipelineExecution> observable, String application, String type) {
+    List<? extends Map> executions =
+        observable.filter(filter).map(mapper).toList().toBlocking().single();
     executions.sort(comparing(a -> (Long) Optional.ofNullable(a.get("startTime")).orElse(0L)));
     if (executions.size() > threshold) {
       executions

@@ -16,20 +16,20 @@
 
 package com.netflix.spinnaker.orca.kayenta.tasks
 
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.kayenta.pipeline.KayentaCanaryStage
 import com.netflix.spinnaker.orca.kayenta.pipeline.RunCanaryPipelineStage
 import com.netflix.spinnaker.spek.values
 import com.netflix.spinnaker.spek.where
+import java.time.Duration
+import java.util.UUID
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.Spek
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.it
-import java.time.Duration
-import java.util.UUID
 
 object AggregateCanaryResultsTaskSpec : Spek({
 
@@ -83,10 +83,12 @@ object AggregateCanaryResultsTaskSpec : Spek({
           name = "kayentaCanary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to UUID.randomUUID().toString(),
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021"
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021"
+              )
+            ),
             "scoreThresholds" to scoreThresholds,
             "lifetimeDuration" to Duration.parse("PT1H")
           )
@@ -132,10 +134,12 @@ object AggregateCanaryResultsTaskSpec : Spek({
           name = "kayentaCanary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to UUID.randomUUID().toString(),
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021"
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021"
+              )
+            ),
             "scoreThresholds" to scoreThresholds,
             "lifetimeDuration" to Duration.parse("PT1H")
           )
@@ -159,10 +163,12 @@ object AggregateCanaryResultsTaskSpec : Spek({
           name = "kayentaCanary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to UUID.randomUUID().toString(),
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021"
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021"
+              )
+            ),
             "scoreThresholds" to scoreThresholds,
             "lifetimeDuration" to Duration.parse("PT1H")
           )

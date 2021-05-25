@@ -17,15 +17,16 @@
 package com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.strategies
 
 import com.netflix.spinnaker.kork.exceptions.UserException
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.clouddriver.pipeline.servergroup.UpdateLaunchTemplateStage
 import com.netflix.spinnaker.orca.kato.pipeline.ModifyAsgLaunchConfigurationStage
 import com.netflix.spinnaker.orca.kato.pipeline.RollingPushStage
 import com.netflix.spinnaker.orca.kato.pipeline.support.SourceResolver
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner
+import com.netflix.spinnaker.orca.pipeline.StageExecutionFactory
 import groovy.transform.Immutable
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
-import static com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder.newStage
 
 @Component
 @Deprecated
@@ -37,13 +38,16 @@ class RollingPushStrategy implements Strategy {
   ModifyAsgLaunchConfigurationStage modifyAsgLaunchConfigurationStage
 
   @Autowired
+  UpdateLaunchTemplateStage updateLaunchTemplateStage
+
+  @Autowired
   RollingPushStage rollingPushStage
 
   @Autowired
   SourceResolver sourceResolver
 
   @Override
-  List<Stage> composeBeforeStages(Stage parent) {
+  List<StageExecution> composeBeforeStages(StageExecution parent) {
     def source = sourceResolver.getSource(parent)
 
     if (!source) {
@@ -54,7 +58,7 @@ class RollingPushStrategy implements Strategy {
   }
 
   @Override
-  List<Stage> composeAfterStages(Stage stage) {
+  List<StageExecution> composeAfterStages(StageExecution stage) {
     def stages = []
     def source = sourceResolver.getSource(stage)
 
@@ -77,10 +81,10 @@ class RollingPushStrategy implements Strategy {
         ]
     ]
 
-    stages << newStage(
+    stages << StageExecutionFactory.newStage(
       stage.execution,
-      modifyAsgLaunchConfigurationStage.type,
-      "modifyLaunchConfiguration",
+      stage.context.setLaunchTemplate ? updateLaunchTemplateStage.type : modifyAsgLaunchConfigurationStage.type,
+      stage.context.setLaunchTemplate ? "updateLaunchTemplate" : "modifyLaunchConfiguration",
       modifyCtx,
       stage,
       SyntheticStageOwner.STAGE_AFTER
@@ -88,7 +92,7 @@ class RollingPushStrategy implements Strategy {
 
     def terminationConfig = stage.mapTo("/termination", TerminationConfig)
     if (terminationConfig.relaunchAllInstances || terminationConfig.totalRelaunches > 0) {
-      stages << newStage(
+      stages << StageExecutionFactory.newStage(
         stage.execution,
         rollingPushStage.type,
         "rollingPush",

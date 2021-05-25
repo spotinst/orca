@@ -25,7 +25,7 @@ dependencies {
   implementation(project(":orca-core"))
   implementation(project(":orca-queue"))
   implementation(project(":orca-redis"))
-  implementation("com.netflix.spinnaker.keiko:keiko-redis-spring:$keikoVersion")
+  implementation(project(":keiko-redis-spring"))
   implementation("com.fasterxml.jackson.module:jackson-module-kotlin")
 
   testImplementation(project(":orca-queue"))
@@ -34,7 +34,7 @@ dependencies {
   testImplementation(project(":orca-test-redis"))
   testImplementation("org.springframework:spring-test")
   testImplementation("org.springframework.boot:spring-boot-test")
-  testImplementation("com.netflix.spinnaker.kork:kork-jedis-test")
+  testImplementation("io.spinnaker.kork:kork-jedis-test")
 
-  testImplementation("com.netflix.spinnaker.kork:kork-core")
+  testImplementation("io.spinnaker.kork:kork-core")
 }

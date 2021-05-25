@@ -17,22 +17,23 @@
 package com.netflix.spinnaker.orca.q.handler
 
 import com.google.common.util.concurrent.MoreExecutors
-import com.netflix.spinnaker.orca.CancellableStage
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.StageResolver
+import com.netflix.spinnaker.orca.DefaultStageResolver
 import com.netflix.spinnaker.orca.TaskResolver
-import com.netflix.spinnaker.orca.api.SimpleStage
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
+import com.netflix.spinnaker.orca.api.pipeline.CancellableStage
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.pipeline.DefaultStageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.StageNavigator
 import com.netflix.spinnaker.orca.q.CancelStage
+import com.netflix.spinnaker.orca.q.StageDefinitionBuildersProvider
+import com.netflix.spinnaker.orca.q.TasksProvider
 import com.netflix.spinnaker.orca.q.singleTaskStage
 import com.netflix.spinnaker.q.Queue
 import com.nhaarman.mockito_kotlin.any
@@ -53,11 +54,12 @@ object CancelStageHandlerTest : SubjectSpek<CancelStageHandler>({
   val queue: Queue = mock()
   val repository: ExecutionRepository = mock()
   val executor = MoreExecutors.directExecutor()
-  val taskResolver: TaskResolver = TaskResolver(emptyList())
+  val taskResolver: TaskResolver = TaskResolver(TasksProvider(emptyList()))
   val stageNavigator: StageNavigator = mock()
 
   val cancellableStage: CancelableStageDefinitionBuilder = mock()
-  val stageResolver = StageResolver(listOf(singleTaskStage, cancellableStage), emptyList<SimpleStage<Object>>())
+  whenever(cancellableStage.type) doReturn "cancellable"
+  val stageResolver = DefaultStageResolver(StageDefinitionBuildersProvider(listOf(singleTaskStage, cancellableStage)))
 
   subject(GROUP) {
     CancelStageHandler(

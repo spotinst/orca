@@ -16,21 +16,23 @@
 
 package com.netflix.spinnaker.orca.front50.tasks
 
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.Task
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.Task
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
 import com.netflix.spinnaker.orca.front50.DependentPipelineStarter
 import com.netflix.spinnaker.orca.front50.Front50Service
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.pipelinetemplate.V2Util
 import com.netflix.spinnaker.security.AuthenticatedRequest
-import com.netflix.spinnaker.security.User
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
+
+import javax.annotation.Nonnull
 
 @Component
 @Slf4j
@@ -52,8 +54,9 @@ class StartPipelineTask implements Task {
     this.executionPreprocessors = executionPreprocessors.orElse(Collections.emptyList())
   }
 
+  @Nonnull
   @Override
-  TaskResult execute(Stage stage) {
+  TaskResult execute(@Nonnull StageExecution stage) {
     if (!front50Service) {
       throw new UnsupportedOperationException("Cannot start a stored pipeline, front50 is not enabled. Fix this by setting front50.enabled: true")
     }
@@ -66,18 +69,18 @@ class StartPipelineTask implements Task {
     Map<String, Object> pipelineConfig = pipelines.find { it.id == pipelineId }
 
     if (!pipelineConfig) {
-      throw new IllegalArgumentException("The referenced ${isStrategy ? 'custom strategy' : 'pipeline'} cannot be located (${pipelineId})")
+      throw new ConfigurationException("The referenced ${isStrategy ? 'custom strategy' : 'pipeline'} cannot be located (${pipelineId})")
     }
 
     if (pipelineConfig.getOrDefault("disabled", false)) {
-      throw new IllegalArgumentException("The referenced ${isStrategy ? 'custom strategy' : 'pipeline'} is disabled")
+      throw new ConfigurationException("The referenced ${isStrategy ? 'custom strategy' : 'pipeline'} is disabled")
     }
 
     if (V2Util.isV2Pipeline(pipelineConfig)) {
       pipelineConfig = V2Util.planPipeline(contextParameterProcessor, executionPreprocessors, pipelineConfig)
     }
 
-    def parameters = stage.context.pipelineParameters ?: [:]
+    Map parameters = stage.context.pipelineParameters ?: [:]
 
     if (isStrategy) {
       def deploymentDetails = stage.context.deploymentDetails?.collect { Map it ->
@@ -105,7 +108,7 @@ class StartPipelineTask implements Task {
 
     def pipeline = dependentPipelineStarter.trigger(
       pipelineConfig,
-      stage.context.user,
+      stage.context.user as String,
       stage.execution,
       parameters,
       stage.id,
@@ -121,15 +124,15 @@ class StartPipelineTask implements Task {
   //
   // In the case of the implicit pipeline invocation, the MDC is empty, which is why we fall back
   // to Execution.AuthenticationDetails of the parent pipeline.
-  User getUser(Execution parentPipeline) {
+  PipelineExecution.AuthenticationDetails getUser(PipelineExecution parentPipeline) {
     def korkUsername = AuthenticatedRequest.getSpinnakerUser()
     if (korkUsername.isPresent()) {
       def korkAccounts = AuthenticatedRequest.getSpinnakerAccounts().orElse("")
-      return new User(email: korkUsername.get(), allowedAccounts: korkAccounts?.split(",")?.toList() ?: []).asImmutable()
+      return new PipelineExecution.AuthenticationDetails(korkUsername.get(), korkAccounts.split(","))
     }
 
     if (parentPipeline.authentication?.user) {
-      return parentPipeline.authentication.toKorkUser().get()
+      return parentPipeline.authentication
     }
 
     return null

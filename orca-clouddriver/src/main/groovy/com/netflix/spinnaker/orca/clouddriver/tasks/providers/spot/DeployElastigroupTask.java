@@ -16,14 +16,14 @@
 package com.netflix.spinnaker.orca.clouddriver.tasks.providers.spot;
 
 import com.google.common.collect.ImmutableMap;
-import com.netflix.spinnaker.orca.ExecutionStatus;
-import com.netflix.spinnaker.orca.Task;
-import com.netflix.spinnaker.orca.TaskResult;
+import com.netflix.spinnaker.orca.api.pipeline.Task;
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult;
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus;
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution;
 import com.netflix.spinnaker.orca.clouddriver.KatoService;
 import com.netflix.spinnaker.orca.clouddriver.model.TaskId;
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask;
 import com.netflix.spinnaker.orca.clouddriver.utils.HealthHelper;
-import com.netflix.spinnaker.orca.pipeline.model.Stage;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
@@ -42,7 +42,7 @@ public class DeployElastigroupTask extends AbstractCloudProviderAwareTask implem
 
   @Nonnull
   @Override
-  public TaskResult execute(@Nonnull Stage stage) {
+  public TaskResult execute(@Nonnull StageExecution stage) {
     String cloudProvider = getCloudProvider(stage);
 
     Map<String, Object> task = new HashMap<>(stage.getContext());
@@ -51,10 +51,7 @@ public class DeployElastigroupTask extends AbstractCloudProviderAwareTask implem
 
     String credentials = getCredentials(stage);
     TaskId taskId =
-        katoService
-            .requestOperations(cloudProvider, Collections.singletonList(operation))
-            .toBlocking()
-            .first();
+        katoService.requestOperations(cloudProvider, Collections.singletonList(operation));
 
     Map<String, Object> outputs = new HashMap<>();
     outputs.put("notification.type", TASK_NAME);

@@ -16,17 +16,18 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.PAUSED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
 import com.netflix.spinnaker.orca.TaskResolver
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.fixture.task
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.PAUSED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
+import com.netflix.spinnaker.orca.api.test.task
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.tasks.NoOpTask
 import com.netflix.spinnaker.orca.q.ResumeTask
 import com.netflix.spinnaker.orca.q.RunTask
+import com.netflix.spinnaker.orca.q.TasksProvider
 import com.netflix.spinnaker.q.Queue
 import com.nhaarman.mockito_kotlin.check
 import com.nhaarman.mockito_kotlin.doReturn
@@ -45,7 +46,7 @@ object ResumeTaskHandlerTest : SubjectSpek<ResumeTaskHandler>({
 
   val queue: Queue = mock()
   val repository: ExecutionRepository = mock()
-  val taskResolver = TaskResolver(emptyList())
+  val taskResolver = TaskResolver(TasksProvider(emptyList()))
 
   subject(GROUP) {
     ResumeTaskHandler(queue, repository, taskResolver)
@@ -79,10 +80,12 @@ object ResumeTaskHandlerTest : SubjectSpek<ResumeTaskHandler>({
     }
 
     it("sets the stage status to running") {
-      verify(repository).storeStage(check {
-        assertThat(it.id).isEqualTo(message.stageId)
-        assertThat(it.tasks.first().status).isEqualTo(RUNNING)
-      })
+      verify(repository).storeStage(
+        check {
+          assertThat(it.id).isEqualTo(message.stageId)
+          assertThat(it.tasks.first().status).isEqualTo(RUNNING)
+        }
+      )
     }
 
     it("resumes all paused tasks") {

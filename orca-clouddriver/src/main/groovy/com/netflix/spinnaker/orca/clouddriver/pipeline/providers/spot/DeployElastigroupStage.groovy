@@ -17,13 +17,14 @@
 package com.netflix.spinnaker.orca.clouddriver.pipeline.providers.spot
 
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.clouddriver.ForceCacheRefreshAware
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.instance.WaitForUpInstancesTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.providers.spot.DeployElastigroupTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.ServerGroupCacheForceRefreshTask
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -32,14 +33,14 @@ import javax.annotation.Nonnull
 
 @Slf4j
 @Component
-class DeployElastigroupStage implements StageDefinitionBuilder {
+class DeployElastigroupStage implements StageDefinitionBuilder, ForceCacheRefreshAware {
   public static final String PIPELINE_CONFIG_TYPE = "deployElastigroup";
 
   @Autowired
   private DynamicConfigService dynamicConfigService
 
   @Override
-  public void taskGraph(@Nonnull Stage stage, @Nonnull TaskNode.Builder builder) {
+  public void taskGraph(@Nonnull StageExecution stage, @Nonnull TaskNode.Builder builder) {
     builder.withTask(PIPELINE_CONFIG_TYPE, DeployElastigroupTask.class)
         .withTask("monitorDeploy", MonitorKatoTask.class)
 

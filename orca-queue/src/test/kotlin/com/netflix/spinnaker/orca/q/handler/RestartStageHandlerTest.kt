@@ -16,23 +16,23 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.StageResolver
-import com.netflix.spinnaker.orca.api.SimpleStage
-import com.netflix.spinnaker.orca.api.SimpleStageInput
-import com.netflix.spinnaker.orca.api.SimpleStageOutput
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
+import com.netflix.spinnaker.orca.DefaultStageResolver
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.pipeline.DefaultStageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.RestartStage
+import com.netflix.spinnaker.orca.q.StageDefinitionBuildersProvider
 import com.netflix.spinnaker.orca.q.StartStage
 import com.netflix.spinnaker.orca.q.buildAfterStages
 import com.netflix.spinnaker.orca.q.buildBeforeStages
@@ -55,11 +55,6 @@ import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.times
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.whenever
-import org.assertj.core.api.Assertions.assertThat
-import org.jetbrains.spek.api.dsl.describe
-import org.jetbrains.spek.api.dsl.it
-import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
-import org.jetbrains.spek.subject.SubjectSpek
 import java.time.temporal.ChronoUnit.HOURS
 import java.time.temporal.ChronoUnit.MINUTES
 import kotlin.collections.contains
@@ -72,6 +67,11 @@ import kotlin.collections.map
 import kotlin.collections.mapOf
 import kotlin.collections.set
 import kotlin.collections.setOf
+import org.assertj.core.api.Assertions.assertThat
+import org.jetbrains.spek.api.dsl.describe
+import org.jetbrains.spek.api.dsl.it
+import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
+import org.jetbrains.spek.subject.SubjectSpek
 
 object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
 
@@ -80,27 +80,18 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
   val pendingExecutionService: PendingExecutionService = mock()
   val clock = fixedClock()
 
-  val emptyApiStage = object : SimpleStage<Object> {
-    override fun getName() = "emptyApiStage"
-
-    override fun execute(simpleStageInput: SimpleStageInput<Object>): SimpleStageOutput<Any, Any> {
-      return SimpleStageOutput()
-    }
-  }
-
   subject(GROUP) {
     RestartStageHandler(
       queue,
       repository,
       DefaultStageDefinitionBuilderFactory(
-        StageResolver(
-          listOf(
-            singleTaskStage,
-            stageWithSyntheticBefore,
-            stageWithNestedSynthetics
-          ),
-          listOf(
-            emptyApiStage
+        DefaultStageResolver(
+          StageDefinitionBuildersProvider(
+            listOf(
+              singleTaskStage,
+              stageWithSyntheticBefore,
+              stageWithNestedSynthetics
+            )
           )
         )
       ),
@@ -191,36 +182,44 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
       }
 
       it("resets the stage's status") {
-        verify(repository).storeStage(check {
-          assertThat(it.id).isEqualTo(message.stageId)
-          assertThat(it.status).isEqualTo(NOT_STARTED)
-          assertThat(it.startTime).isNull()
-          assertThat(it.endTime).isNull()
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.id).isEqualTo(message.stageId)
+            assertThat(it.status).isEqualTo(NOT_STARTED)
+            assertThat(it.startTime).isNull()
+            assertThat(it.endTime).isNull()
+          }
+        )
       }
 
       it("removes the stage's tasks") {
-        verify(repository).storeStage(check {
-          assertThat(it.tasks).isEmpty()
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.tasks).isEmpty()
+          }
+        )
       }
 
       it("adds restart details to the stage context") {
-        verify(repository).storeStage(check {
-          assertThat(it.context.keys).doesNotContain("exception")
-          assertThat(it.context["restartDetails"]).isEqualTo(mapOf(
-            "restartedBy" to "fzlem@netflix.com",
-            "restartTime" to clock.millis(),
-            "previousException" to "o noes"
-          ))
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.context.keys).doesNotContain("exception")
+            assertThat(it.context["restartDetails"]).isEqualTo(
+              mapOf(
+                "restartedBy" to "fzlem@netflix.com",
+                "restartTime" to clock.millis(),
+                "previousException" to "o noes"
+              )
+            )
+          }
+        )
       }
 
       it("removes the stage's synthetic stages") {
         pipeline
           .stages
           .filter { it.parentStageId == message.stageId }
-          .map(Stage::getId)
+          .map(StageExecution::getId)
           .forEach {
             verify(repository).removeStage(pipeline, it)
           }
@@ -229,14 +228,14 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
       val nestedSyntheticStageIds = pipeline
         .stages
         .filter { it.parentStageId == message.stageId }
-        .map(Stage::getId)
+        .map(StageExecution::getId)
 
       it("removes the nested synthetic stages") {
         assertThat(nestedSyntheticStageIds).isNotEmpty
         pipeline
           .stages
           .filter { it.parentStageId in nestedSyntheticStageIds }
-          .map(Stage::getId)
+          .map(StageExecution::getId)
           .forEach {
             verify(repository).removeStage(pipeline, it)
           }
@@ -252,16 +251,19 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
       }
 
       it("marks the execution as running") {
-        verify(repository).updateStatus(PIPELINE, pipeline.id, RUNNING)
+        assertThat(pipeline.status).isEqualTo(RUNNING)
+        verify(repository).updateStatus(pipeline)
       }
 
       it("runs the stage") {
-        verify(queue).push(check<StartStage> {
-          assertThat(it.executionType).isEqualTo(message.executionType)
-          assertThat(it.executionId).isEqualTo(message.executionId)
-          assertThat(it.application).isEqualTo(message.application)
-          assertThat(it.stageId).isEqualTo(message.stageId)
-        })
+        verify(queue).push(
+          check<StartStage> {
+            assertThat(it.executionType).isEqualTo(message.executionType)
+            assertThat(it.executionId).isEqualTo(message.executionId)
+            assertThat(it.application).isEqualTo(message.application)
+            assertThat(it.stageId).isEqualTo(message.stageId)
+          }
+        )
       }
     }
   }
@@ -310,7 +312,7 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
 
     it("removes downstream stages' tasks") {
       val downstreamStageIds = setOf("2", "3").map { pipeline.stageByRef(it).id }
-      argumentCaptor<Stage>().apply {
+      argumentCaptor<StageExecutionImpl>().apply {
         verify(repository, atLeast(2)).storeStage(capture())
         downstreamStageIds.forEach {
           assertThat(allValues.map { it.id }).contains(it)
@@ -383,7 +385,7 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
 
     it("removes join stages' tasks") {
       val downstreamStageIds = setOf("1", "3", "4").map { pipeline.stageByRef(it).id }
-      argumentCaptor<Stage>().apply {
+      argumentCaptor<StageExecutionImpl>().apply {
         verify(repository, times(3)).storeStage(capture())
         assertThat(allValues.map { it.id }).isEqualTo(downstreamStageIds)
         allValues.forEach {
@@ -436,20 +438,22 @@ object RestartStageHandlerTest : SubjectSpek<RestartStageHandler>({
     }
 
     it("runs the parent stage") {
-      verify(queue).push(check<StartStage> {
-        assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
-        assertThat(it.stageId).isNotEqualTo(syntheticStage.id)
-        assertThat(it.stageId).isNotEqualTo(message.stageId)
-        assertThat(it.executionType).isEqualTo(message.executionType)
-        assertThat(it.executionId).isEqualTo(message.executionId)
-        assertThat(it.application).isEqualTo(message.application)
-      })
+      verify(queue).push(
+        check<StartStage> {
+          assertThat(it.stageId).isEqualTo(pipeline.stageByRef("1").id)
+          assertThat(it.stageId).isNotEqualTo(syntheticStage.id)
+          assertThat(it.stageId).isNotEqualTo(message.stageId)
+          assertThat(it.executionType).isEqualTo(message.executionType)
+          assertThat(it.executionId).isEqualTo(message.executionId)
+          assertThat(it.application).isEqualTo(message.application)
+        }
+      )
     }
   }
 })
 
-fun StageDefinitionBuilder.plan(stage: Stage) {
+fun StageDefinitionBuilder.plan(stage: StageExecution) {
   stage.type = type
-  buildTasks(stage)
+  buildTasks(stage, NoOpTaskImplementationResolver())
   buildBeforeStages(stage)
 }

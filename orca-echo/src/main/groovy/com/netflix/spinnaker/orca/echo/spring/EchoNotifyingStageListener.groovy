@@ -16,14 +16,13 @@
 package com.netflix.spinnaker.orca.echo.spring
 
 import com.netflix.spinnaker.kork.common.Header
-import com.netflix.spinnaker.orca.ExecutionStatus
+import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.TaskExecution
 import com.netflix.spinnaker.orca.echo.EchoService
-import com.netflix.spinnaker.orca.listeners.Persister
 import com.netflix.spinnaker.orca.listeners.StageListener
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.Task
-import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.security.AuthenticatedRequest
 import groovy.transform.CompileDynamic
@@ -31,8 +30,9 @@ import groovy.transform.CompileStatic
 import groovy.util.logging.Slf4j
 import org.slf4j.MDC
 import org.springframework.beans.factory.annotation.Autowired
-import static com.netflix.spinnaker.orca.ExecutionStatus.*
-import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.ORCHESTRATION
+
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.*
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.ORCHESTRATION
 
 /**
  * Converts execution events to Echo events.
@@ -40,45 +40,45 @@ import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.
 @CompileStatic
 @Slf4j
 class EchoNotifyingStageListener implements StageListener {
-
+  public static final String INCLUDE_FULL_EXECUTION_PROPERTY = "echo.events.includeFullExecution"
   private final EchoService echoService
-  private final ExecutionRepository repository
   private final ContextParameterProcessor contextParameterProcessor
+  private final DynamicConfigService dynamicConfigService
 
   @Autowired
-  EchoNotifyingStageListener(EchoService echoService, ExecutionRepository repository, ContextParameterProcessor contextParameterProcessor) {
+  EchoNotifyingStageListener(EchoService echoService,
+                             ContextParameterProcessor contextParameterProcessor,
+                             DynamicConfigService dynamicConfigService) {
     this.echoService = echoService
-    this.repository = repository
     this.contextParameterProcessor = contextParameterProcessor
+    this.dynamicConfigService = dynamicConfigService
   }
 
   @Override
-  void beforeTask(Persister persister, Stage stage, Task task) {
+  void beforeTask(StageExecution stage, TaskExecution task) {
     recordEvent('task', 'starting', stage, task)
   }
 
   @Override
   @CompileDynamic
-  void beforeStage(Persister persister, Stage stage) {
+  void beforeStage(StageExecution stage) {
     recordEvent("stage", "starting", stage)
   }
 
   @Override
-  void afterTask(Persister persister,
-                 Stage stage,
-                 Task task,
-                 ExecutionStatus executionStatus,
-                 boolean wasSuccessful) {
-    if (executionStatus == RUNNING) {
+  void afterTask(StageExecution stage,
+                 TaskExecution task) {
+    ExecutionStatus status = task.getStatus()
+    if (status == RUNNING) {
       return
     }
 
-    recordEvent('task', (wasSuccessful ? "complete" : "failed"), stage, task)
+    recordEvent('task', (status.isSuccessful() ? "complete" : "failed"), stage, task)
   }
 
   @Override
   @CompileDynamic
-  void afterStage(Persister persister, Stage stage) {
+  void afterStage(StageExecution stage) {
     // STOPPED stages are "successful" because they allow the pipeline to
     // proceed but they are still failures in terms of the stage and should
     // send failure notifications
@@ -94,15 +94,15 @@ class EchoNotifyingStageListener implements StageListener {
     }
   }
 
-  private void recordEvent(String type, String phase, Stage stage, Task task) {
+  private void recordEvent(String type, String phase, StageExecution stage, TaskExecution task) {
     recordEvent(type, phase, stage, Optional.of(task))
   }
 
-  private void recordEvent(String type, String phase, Stage stage) {
+  private void recordEvent(String type, String phase, StageExecution stage) {
     recordEvent(type, phase, stage, Optional.empty())
   }
 
-  private void recordEvent(String type, String phase, Stage stage, Optional<Task> maybeTask) {
+  private void recordEvent(String type, String phase, StageExecution stage, Optional<TaskExecution> maybeTask) {
     try {
       def event = [
         details: [
@@ -116,14 +116,24 @@ class EchoNotifyingStageListener implements StageListener {
           context    : buildContext(stage.execution, stage.context),
           startTime  : stage.startTime,
           endTime    : stage.endTime,
-          execution  : stage.execution,
           executionId: stage.execution.id,
+          stageId    : stage.id,
           isSynthetic: stage.syntheticStageOwner != null,
           name: stage.name
         ]
       ]
-      maybeTask.ifPresent { Task task ->
+      maybeTask.ifPresent { TaskExecution task ->
         event.content.taskName = "${stage.type}.${task.name}".toString()
+      }
+
+      if (dynamicConfigService.getConfig(Boolean, INCLUDE_FULL_EXECUTION_PROPERTY, true)) {
+        event.content.execution = stage.execution
+      } else {
+        if (type == 'task') {
+          // skip the full execution for task events
+        } else {
+          event.content.execution = stage.execution
+        }
       }
 
       try {
@@ -137,11 +147,11 @@ class EchoNotifyingStageListener implements StageListener {
         MDC.remove(Header.USER.header)
       }
     } catch (Exception e) {
-      log.error("Failed to send ${type} event ${phase} ${stage.execution.id} ${maybeTask.map { Task task -> task.name }}", e)
+      log.error("Failed to send ${type} event ${phase} ${stage.execution.id} ${maybeTask.map { TaskExecution task -> task.name }}", e)
     }
   }
 
-  private Map<String, Object> buildContext(Execution execution, Map context) {
+  private Map<String, Object> buildContext(PipelineExecution execution, Map context) {
     return contextParameterProcessor.process(
       context,
       [execution: execution] as Map<String, Object>,

@@ -16,41 +16,40 @@
 
 package com.netflix.spinnaker.orca.q
 
-import com.netflix.appinfo.InstanceInfo.InstanceStatus.OUT_OF_SERVICE
-import com.netflix.appinfo.InstanceInfo.InstanceStatus.STARTING
-import com.netflix.appinfo.InstanceInfo.InstanceStatus.UP
-import com.netflix.discovery.StatusChangeEvent
 import com.netflix.spectator.api.NoopRegistry
 import com.netflix.spectator.api.Registry
 import com.netflix.spinnaker.assertj.assertSoftly
 import com.netflix.spinnaker.config.OrcaQueueConfiguration
 import com.netflix.spinnaker.config.QueueConfiguration
-import com.netflix.spinnaker.kork.eureka.RemoteStatusChangedEvent
-import com.netflix.spinnaker.orca.CancellableStage
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.STOPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.kork.discovery.DiscoveryStatusChangeEvent
+import com.netflix.spinnaker.kork.discovery.InstanceStatus
+import com.netflix.spinnaker.kork.discovery.RemoteStatusChangedEvent
+import com.netflix.spinnaker.orca.api.pipeline.CancellableStage
+import com.netflix.spinnaker.orca.api.pipeline.SkippableTask
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner.STAGE_BEFORE
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageGraphBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode.Builder
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.config.OrcaConfiguration
 import com.netflix.spinnaker.orca.exceptions.DefaultExceptionHandler
 import com.netflix.spinnaker.orca.ext.withTask
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
 import com.netflix.spinnaker.orca.listeners.DelegatingApplicationEventMulticaster
 import com.netflix.spinnaker.orca.pipeline.RestrictExecutionDuringTimeWindow
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder.newStage
-import com.netflix.spinnaker.orca.pipeline.TaskNode.Builder
-import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner.STAGE_BEFORE
+import com.netflix.spinnaker.orca.pipeline.StageExecutionFactory
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.pipeline.util.StageNavigator
@@ -68,6 +67,11 @@ import com.nhaarman.mockito_kotlin.never
 import com.nhaarman.mockito_kotlin.reset
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Clock
+import java.time.Duration
+import java.time.Instant.now
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit.HOURS
 import org.assertj.core.api.Assertions.assertThat
 import org.junit.After
 import org.junit.Before
@@ -87,11 +91,6 @@ import org.springframework.context.event.ApplicationEventMulticaster
 import org.springframework.context.event.SimpleApplicationEventMulticaster
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor
 import org.springframework.test.context.junit4.SpringRunner
-import java.time.Clock
-import java.time.Duration
-import java.time.Instant.now
-import java.time.ZoneId
-import java.time.temporal.ChronoUnit.HOURS
 
 @SpringBootTest(
   classes = [TestConfig::class],
@@ -117,16 +116,22 @@ abstract class QueueIntegrationTest {
 
   @Before
   fun discoveryUp() {
-    context.publishEvent(RemoteStatusChangedEvent(StatusChangeEvent(STARTING, UP)))
+    context.publishEvent(RemoteStatusChangedEvent(DiscoveryStatusChangeEvent(InstanceStatus.STARTING, InstanceStatus.UP)))
   }
 
   @After
   fun discoveryDown() {
-    context.publishEvent(RemoteStatusChangedEvent(StatusChangeEvent(UP, OUT_OF_SERVICE)))
+    context.publishEvent(RemoteStatusChangedEvent(DiscoveryStatusChangeEvent(InstanceStatus.UP, InstanceStatus.OUT_OF_SERVICE)))
   }
 
   @After
-  fun resetMocks() = reset(dummyTask)
+  fun resetMocks() {
+    reset(dummyTask)
+    whenever(dummyTask.extensionClass) doReturn dummyTask::class.java
+    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
+    whenever(dummyTask.isEnabledPropertyName) doReturn SkippableTask.isEnabledPropertyName(dummyTask.javaClass.simpleName)
+  }
+
 
   @Test
   fun `can run a simple pipeline`() {
@@ -139,7 +144,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -159,7 +163,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.RUNNING doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -194,7 +197,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -234,7 +236,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -327,7 +328,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(argThat { refId == "2a1" })) doReturn TaskResult.ofStatus(TERMINAL)
     whenever(dummyTask.execute(argThat { refId != "2a1" })) doReturn TaskResult.SUCCEEDED
 
@@ -375,7 +375,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(argThat { refId == "2a1" })) doReturn TaskResult.ofStatus(TERMINAL)
     whenever(dummyTask.execute(argThat { refId != "2a1" })) doReturn TaskResult.SUCCEEDED
 
@@ -430,7 +429,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(argThat { refId == "2a1" })) doReturn TaskResult.ofStatus(TERMINAL)
     whenever(dummyTask.execute(argThat { refId != "2a1" })) doReturn TaskResult.SUCCEEDED
 
@@ -476,6 +474,7 @@ abstract class QueueIntegrationTest {
     repository.store(parentPipeline)
 
     whenever(dummyTask.execute(argThat { refId == "1b" })) doReturn TaskResult.ofStatus(CANCELED)
+
     context.runParentToCompletion(parentPipeline, childPipeline, runner::start, repository)
 
     repository.retrieve(PIPELINE, parentPipeline.id).apply {
@@ -532,7 +531,7 @@ abstract class QueueIntegrationTest {
     }
   }
 
-  private fun Stage.wasShorterThan(lengthMs: Long): Boolean {
+  private fun StageExecution.wasShorterThan(lengthMs: Long): Boolean {
     val start = startTime
     val end = endTime
     return if (start == null || end == null) {
@@ -554,19 +553,20 @@ abstract class QueueIntegrationTest {
           "restrictExecutionDuringTimeWindow" to true,
           "restrictedExecutionWindow" to mapOf(
             "days" to (1..7).toList(),
-            "whitelist" to listOf(mapOf(
-              "startHour" to now.hour,
-              "startMin" to 0,
-              "endHour" to now.plus(1, HOURS).hour,
-              "endMin" to 0
-            ))
+            "whitelist" to listOf(
+              mapOf(
+                "startHour" to now.hour,
+                "startMin" to 0,
+                "endHour" to now.plus(1, HOURS).hour,
+                "endMin" to 0
+              )
+            )
           )
         )
       }
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -591,19 +591,20 @@ abstract class QueueIntegrationTest {
           "restrictExecutionDuringTimeWindow" to true,
           "restrictedExecutionWindow" to mapOf(
             "days" to (1..7).toList(),
-            "whitelist" to listOf(mapOf(
-              "startHour" to now.hour,
-              "startMin" to 0,
-              "endHour" to now.plus(1, HOURS).hour,
-              "endMin" to 0
-            ))
+            "whitelist" to listOf(
+              mapOf(
+                "startHour" to now.hour,
+                "startMin" to 0,
+                "endHour" to now.plus(1, HOURS).hour,
+                "endMin" to 0
+              )
+            )
           )
         )
       }
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED
 
     context.runToCompletion(pipeline, runner::start, repository)
@@ -617,7 +618,8 @@ abstract class QueueIntegrationTest {
           "dummy",
           "dummy",
           "dummy",
-          "parallel")
+          "parallel"
+        )
         assertThat(stages.map { it.status }).allMatch { it == SUCCEEDED }
       }
     }
@@ -641,16 +643,17 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.builder(SUCCEEDED).context(mapOf("output" to "foo")).build()
 
     context.runToCompletion(pipeline, runner::start, repository)
 
-    verify(dummyTask).execute(check {
-      // expressions should be resolved in the stage passes to tasks
-      assertThat(it.context["expr"]).isEqualTo(true)
-      assertThat((it.context["key"] as Map<String, Any>)["expr"]).isEqualTo(true)
-    })
+    verify(dummyTask).execute(
+      check {
+        // expressions should be resolved in the stage passes to tasks
+        assertThat(it.context["expr"]).isEqualTo(true)
+        assertThat((it.context["key"] as Map<String, Any>)["expr"]).isEqualTo(true)
+      }
+    )
 
     repository.retrieve(PIPELINE, pipeline.id).apply {
       assertThat(status).isEqualTo(SUCCEEDED)
@@ -690,7 +693,6 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doReturn TaskResult.SUCCEEDED // second run succeeds
 
     context.restartAndRunToCompletion(pipeline.stageByRef("1"), runner::restart, repository)
@@ -731,9 +733,8 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doAnswer {
-      val stage = it.arguments.first() as Stage
+      val stage = it.arguments.first() as StageExecution
       if (stage.refId == "1") {
         TaskResult.builder(SUCCEEDED).outputs(mapOf("foo" to false)).build()
       } else {
@@ -788,9 +789,8 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doAnswer {
-      val stage = it.arguments.first() as Stage
+      val stage = it.arguments.first() as StageExecution
       if (stage.refId == "1") {
         TaskResult.builder(SUCCEEDED).outputs(mapOf("foo" to false)).build()
       } else {
@@ -825,9 +825,8 @@ abstract class QueueIntegrationTest {
     }
     repository.store(pipeline)
 
-    whenever(dummyTask.getDynamicTimeout(any())) doReturn 2000L
     whenever(dummyTask.execute(any())) doAnswer {
-      val stage = it.arguments.first() as Stage
+      val stage = it.arguments.first() as StageExecution
       if (stage.refId == "1") {
         TaskResult.ofStatus(TERMINAL)
       } else {
@@ -868,12 +867,14 @@ class TestConfig {
 
   @Bean
   fun dummyTask(): DummyTask = mock {
+    on { extensionClass } doReturn DummyTask::class.java
     on { getDynamicTimeout(any()) } doReturn Duration.ofMinutes(2).toMillis()
+    on { isEnabledPropertyName } doReturn SkippableTask.isEnabledPropertyName(DummyTask::class.java.simpleName)
   }
 
   @Bean
   fun dummyStage() = object : StageDefinitionBuilder {
-    override fun taskGraph(stage: Stage, builder: Builder) {
+    override fun taskGraph(stage: StageExecution, builder: Builder) {
       builder.withTask<DummyTask>("dummy")
     }
 
@@ -882,10 +883,10 @@ class TestConfig {
 
   @Bean
   fun parallelStage() = object : StageDefinitionBuilder {
-    override fun beforeStages(parent: Stage, graph: StageGraphBuilder) {
+    override fun beforeStages(parent: StageExecution, graph: StageGraphBuilder) {
       listOf("us-east-1", "us-west-2", "eu-west-1")
         .map { region ->
-          newStage(parent.execution, "dummy", "dummy $region", parent.context + mapOf("region" to region), parent, STAGE_BEFORE)
+          StageExecutionFactory.newStage(parent.execution, "dummy", "dummy $region", parent.context + mapOf("region" to region), parent, STAGE_BEFORE)
         }
         .forEach { graph.add(it) }
     }
@@ -897,11 +898,11 @@ class TestConfig {
   fun syntheticFailureStage() = object : StageDefinitionBuilder {
     override fun getType() = "syntheticFailure"
 
-    override fun taskGraph(stage: Stage, builder: Builder) {
+    override fun taskGraph(stage: StageExecution, builder: Builder) {
       builder.withTask<DummyTask>("dummy")
     }
 
-    override fun onFailureStages(stage: Stage, graph: StageGraphBuilder) {
+    override fun onFailureStages(stage: StageExecution, graph: StageGraphBuilder) {
       graph.add {
         it.type = "dummy"
         it.name = "onFailure1"
@@ -919,13 +920,13 @@ class TestConfig {
   @Bean
   fun pipelineStage(@Autowired repository: ExecutionRepository): StageDefinitionBuilder =
     object : CancellableStage, StageDefinitionBuilder {
-      override fun taskGraph(stage: Stage, builder: Builder) {
+      override fun taskGraph(stage: StageExecution, builder: Builder) {
         builder.withTask<DummyTask>("dummy")
       }
 
       override fun getType() = "pipeline"
 
-      override fun cancel(stage: Stage?): CancellableStage.Result {
+      override fun cancel(stage: StageExecution?): CancellableStage.Result {
         repository.cancel(PIPELINE, stage!!.context["executionId"] as String)
         return CancellableStage.Result(stage, mapOf("foo" to "bar"))
       }

@@ -16,7 +16,9 @@
 
 package com.netflix.spinnaker.orca;
 
-import com.netflix.spinnaker.orca.pipeline.model.Stage;
+import com.netflix.spinnaker.orca.api.pipeline.Task;
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult;
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -41,11 +43,26 @@ public interface TaskExecutionInterceptor {
     return TimeUnit.MINUTES.toMillis(2);
   }
 
-  default Stage beforeTaskExecution(Task task, Stage stage) {
+  default StageExecution beforeTaskExecution(Task task, StageExecution stage) {
     return stage;
   }
 
-  default TaskResult afterTaskExecution(Task task, Stage stage, TaskResult taskResult) {
+  default TaskResult afterTaskExecution(Task task, StageExecution stage, TaskResult taskResult) {
     return taskResult;
   }
+
+  /**
+   * hook that is guaranteed to be called, even when a task throws an exception which will cause
+   * afterTaskExecution to not be called.
+   *
+   * <p>As an example you can clear the security context here if you set it in the
+   * beforeTaskExecution hook.
+   *
+   * @param task The task that is being handled.
+   * @param stage The stage for the task execution.
+   * @param taskResult Will be null if the task failed with an exception.
+   * @param e Will be not null if the task failed with an exception.
+   */
+  default void finallyAfterTaskExecution(
+      Task task, StageExecution stage, TaskResult taskResult, Exception e) {}
 }

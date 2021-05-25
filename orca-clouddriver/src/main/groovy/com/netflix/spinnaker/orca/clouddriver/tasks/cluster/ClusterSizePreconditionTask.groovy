@@ -18,12 +18,14 @@ package com.netflix.spinnaker.orca.clouddriver.tasks.cluster
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.netflix.frigga.Names
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
 import com.netflix.spinnaker.moniker.Moniker
-import com.netflix.spinnaker.orca.RetryableTask
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.RetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
 import com.netflix.spinnaker.orca.clouddriver.OortService
+import com.netflix.spinnaker.orca.exceptions.PreconditionFailureException
 import com.netflix.spinnaker.orca.clouddriver.tasks.AbstractCloudProviderAwareTask
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.tasks.PreconditionTask
 import groovy.transform.Canonical
 import org.springframework.beans.factory.annotation.Autowired
@@ -82,7 +84,7 @@ class ClusterSizePreconditionTask extends AbstractCloudProviderAwareTask impleme
         errors << 'Missing regions'
       }
       if (errors) {
-        throw new IllegalStateException("Invalid configuration " + errors.join(','))
+        throw new ConfigurationException("Invalid configuration " + errors.join(', '))
       }
     }
   }
@@ -107,7 +109,7 @@ class ClusterSizePreconditionTask extends AbstractCloudProviderAwareTask impleme
   }
 
   @Override
-  TaskResult execute(Stage stage) {
+  TaskResult execute(StageExecution stage) {
     String cloudProvider = getCloudProvider(stage)
     ComparisonConfig config = stage.mapTo("/context", ComparisonConfig)
     config.validate()
@@ -131,7 +133,7 @@ class ClusterSizePreconditionTask extends AbstractCloudProviderAwareTask impleme
     }
 
     if (failures) {
-      throw new IllegalStateException("Precondition check failed: ${failures.join(', ')}")
+      throw new PreconditionFailureException("Precondition check failed: ${failures.join(', ')}")
     }
 
     return TaskResult.SUCCEEDED

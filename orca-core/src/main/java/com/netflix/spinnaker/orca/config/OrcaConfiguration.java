@@ -21,13 +21,18 @@ import static org.springframework.context.annotation.AnnotationConfigUtils.EVENT
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.netflix.spectator.api.Registry;
 import com.netflix.spinnaker.config.PluginsAutoConfiguration;
+import com.netflix.spinnaker.kork.api.expressions.ExpressionFunctionProvider;
 import com.netflix.spinnaker.kork.core.RetrySupport;
 import com.netflix.spinnaker.kork.dynamicconfig.DynamicConfigService;
-import com.netflix.spinnaker.kork.expressions.ExpressionFunctionProvider;
+import com.netflix.spinnaker.orca.DefaultStageResolver;
+import com.netflix.spinnaker.orca.DynamicStageResolver;
+import com.netflix.spinnaker.orca.DynamicTaskImplementationResolver;
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver;
 import com.netflix.spinnaker.orca.StageResolver;
-import com.netflix.spinnaker.orca.Task;
+import com.netflix.spinnaker.orca.TaskImplementationResolver;
 import com.netflix.spinnaker.orca.TaskResolver;
-import com.netflix.spinnaker.orca.api.SimpleStage;
+import com.netflix.spinnaker.orca.api.pipeline.Task;
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder;
 import com.netflix.spinnaker.orca.commands.ForceExecutionCancellationCommand;
 import com.netflix.spinnaker.orca.events.ExecutionEvent;
 import com.netflix.spinnaker.orca.events.ExecutionListenerAdapter;
@@ -36,18 +41,18 @@ import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper;
 import com.netflix.spinnaker.orca.libdiffs.ComparableLooseVersion;
 import com.netflix.spinnaker.orca.libdiffs.DefaultComparableLooseVersion;
 import com.netflix.spinnaker.orca.listeners.*;
+import com.netflix.spinnaker.orca.pipeline.CompoundExecutionOperator;
 import com.netflix.spinnaker.orca.pipeline.DefaultStageDefinitionBuilderFactory;
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder;
+import com.netflix.spinnaker.orca.pipeline.ExecutionRunner;
 import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilderFactory;
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository;
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor;
 import java.time.Clock;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Optional;
 import org.pf4j.PluginManager;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnMissingBean;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
@@ -76,10 +81,13 @@ import rx.schedulers.Schedulers;
   "com.netflix.spinnaker.orca.pipeline.util",
   "com.netflix.spinnaker.orca.preprocessors",
   "com.netflix.spinnaker.orca.telemetry",
-  "com.netflix.spinnaker.orca.notifications.scheduling"
+  "com.netflix.spinnaker.orca.notifications.scheduling",
 })
-@Import({PreprocessorConfiguration.class, PluginsAutoConfiguration.class})
-@EnableConfigurationProperties
+@Import({
+  PreprocessorConfiguration.class,
+  PluginsAutoConfiguration.class,
+})
+@EnableConfigurationProperties(TaskOverrideConfigurationProperties.class)
 public class OrcaConfiguration {
   @Bean
   public Clock clock() {
@@ -201,16 +209,38 @@ public class OrcaConfiguration {
   }
 
   @Bean
-  public TaskResolver taskResolver(Collection<Task> tasks) {
+  public TaskResolver taskResolver(ObjectProvider<Collection<Task>> tasks) {
     return new TaskResolver(tasks, true);
   }
 
   @Bean
-  public StageResolver stageResolver(
-      Collection<StageDefinitionBuilder> stageDefinitionBuilders,
-      Optional<List<SimpleStage>> simpleStages) {
-    List<SimpleStage> stages = simpleStages.orElseGet(ArrayList::new);
-    return new StageResolver(stageDefinitionBuilders, stages);
+  @ConditionalOnProperty("dynamic-stage-resolver.enabled")
+  public DynamicStageResolver dynamicStageResolver(
+      DynamicConfigService dynamicConfigService,
+      ObjectProvider<Collection<StageDefinitionBuilder>> stageDefinitionBuilders) {
+    return new DynamicStageResolver(dynamicConfigService, stageDefinitionBuilders);
+  }
+
+  @Bean
+  @ConditionalOnMissingBean(StageResolver.class)
+  public DefaultStageResolver defaultStageResolver(
+      ObjectProvider<Collection<StageDefinitionBuilder>> stageDefinitionBuilders) {
+    return new DefaultStageResolver(stageDefinitionBuilders);
+  }
+
+  @Bean
+  @ConditionalOnProperty("task-overrides.enabled")
+  public DynamicTaskImplementationResolver dynamicTaskImplementationResolver(
+      DynamicConfigService dynamicConfigService,
+      TaskOverrideConfigurationProperties taskOverrideConfigurationProperties) {
+    return new DynamicTaskImplementationResolver(
+        dynamicConfigService, taskOverrideConfigurationProperties);
+  }
+
+  @Bean
+  @ConditionalOnMissingBean(TaskImplementationResolver.class)
+  public TaskImplementationResolver defaultTaskImplementationResolver() {
+    return new NoOpTaskImplementationResolver();
   }
 
   @Bean(name = EVENT_LISTENER_FACTORY_BEAN_NAME)
@@ -222,5 +252,11 @@ public class OrcaConfiguration {
   public ForceExecutionCancellationCommand forceExecutionCancellationCommand(
       ExecutionRepository executionRepository, Clock clock) {
     return new ForceExecutionCancellationCommand(executionRepository, clock);
+  }
+
+  @Bean
+  public CompoundExecutionOperator compoundExecutionOperator(
+      ExecutionRepository repository, ExecutionRunner runner, RetrySupport retrySupport) {
+    return new CompoundExecutionOperator(repository, runner, retrySupport);
   }
 }

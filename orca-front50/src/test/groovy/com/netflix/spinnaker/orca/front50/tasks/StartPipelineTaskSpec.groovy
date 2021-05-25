@@ -16,16 +16,16 @@
 
 package com.netflix.spinnaker.orca.front50.tasks
 
+
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
 import com.netflix.spinnaker.orca.front50.DependentPipelineStarter
 import com.netflix.spinnaker.orca.front50.Front50Service
-import com.netflix.spinnaker.orca.pipeline.model.Execution
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
-import com.netflix.spinnaker.security.User
 import spock.lang.Specification
 import spock.lang.Subject
 import spock.lang.Unroll
 
+import static com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution.*
 import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.pipeline
 import static com.netflix.spinnaker.orca.test.model.ExecutionBuilder.stage
 
@@ -67,7 +67,7 @@ class StartPipelineTaskSpec extends Specification {
 
     def gotContext
     def parentPipelineStageId
-    User authenticatedUser
+    AuthenticationDetails authenticatedUser
 
     when:
     def result = task.execute(stage)
@@ -99,13 +99,13 @@ class StartPipelineTaskSpec extends Specification {
     ]
     parentPipelineStageId == stage.id
 
-    authenticatedUser?.email == expectedAuthenticatedEmail
-    authenticatedUser?.allowedAccounts == expectedAuthenticatedAllowedAccounts
+    authenticatedUser?.user == expectedAuthenticatedUsername
+    authenticatedUser?.allowedAccounts?.toList() == expectedAuthenticatedAllowedAccounts
 
     where:
-    authentication || expectedAuthenticatedEmail || expectedAuthenticatedAllowedAccounts
+    authentication || expectedAuthenticatedUsername || expectedAuthenticatedAllowedAccounts
     null           || null                       || null
-    new Execution.AuthenticationDetails(
+    new AuthenticationDetails(
       "authenticated_user",
       "account1"
     )              || "authenticated_user"       || ["account1"]

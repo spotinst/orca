@@ -61,7 +61,15 @@ class BakeRequest {
   StoreType storeType
   Boolean enhancedNetworking
   String amiName
-  String amiSuffix
+  private String amiSuffix
+
+  public void setAmiSuffix(String amiSuffix) {
+    this.amiSuffix = amiSuffix
+  }
+
+  public getAmiSuffix() {
+    return this.amiSuffix
+  }
 
   @JsonInclude(JsonInclude.Include.NON_NULL)
   Integer rootVolumeSize
@@ -80,7 +88,7 @@ class BakeRequest {
   }
 
   static enum CloudProviderType {
-    aws, azure, docker, gce, openstack, titus, oracle, alicloud, huaweicloud
+    aws, azure, docker, gce, openstack, titus, oracle, alicloud, huaweicloud, tencentcloud
   }
 
   static enum VmType {

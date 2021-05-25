@@ -23,7 +23,7 @@ import com.netflix.spinnaker.fiat.model.resources.Role
 import com.netflix.spinnaker.fiat.model.resources.ServiceAccount
 import com.netflix.spinnaker.fiat.shared.FiatPermissionEvaluator
 import com.netflix.spinnaker.fiat.shared.FiatStatus
-import com.netflix.spinnaker.orca.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
 import com.netflix.spinnaker.orca.front50.Front50Service
 import com.netflix.spinnaker.orca.pipeline.model.DefaultTrigger
 import retrofit.client.Response
@@ -143,19 +143,27 @@ class SaveServiceAccountTaskSpec extends Specification {
       ]
     }
 
+    def user = "abc@somedomain.io"
+    def message = ""
+    def exceptionMessage = "User '"+ user +"' is not authorized with all roles for pipeline"
+
     when:
-    stage.getExecution().setTrigger(new DefaultTrigger('manual', null, 'abc@somedomain.io'))
-    def result = task.execute(stage)
+    stage.getExecution().setTrigger(new DefaultTrigger('manual', null, user))
+
+    try {
+      task.execute(stage)
+    } catch (Exception e) {
+      message = e.message
+    }
 
     then:
-    1 * fiatPermissionEvaluator.getPermission('abc@somedomain.io') >> {
+    1 * fiatPermissionEvaluator.getPermission(user) >> {
       new UserPermission().addResources([new Role('foo')]).view
     }
 
     0 * front50Service.saveServiceAccount(_)
 
-    result.status == ExecutionStatus.TERMINAL
-    result.context == ImmutableMap.of()
+    message == exceptionMessage
   }
 
   def "should allow an admin to save pipelines"() {

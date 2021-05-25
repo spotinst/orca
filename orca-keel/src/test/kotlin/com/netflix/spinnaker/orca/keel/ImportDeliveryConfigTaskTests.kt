@@ -18,27 +18,44 @@ package com.netflix.spinnaker.orca.keel
 
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.module.kotlin.convertValue
-import com.netflix.spinnaker.orca.ExecutionStatus
+import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
 import com.netflix.spinnaker.orca.KeelService
-import com.netflix.spinnaker.orca.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
+import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
+import com.netflix.spinnaker.orca.config.KeelConfiguration
 import com.netflix.spinnaker.orca.igor.ScmService
+import com.netflix.spinnaker.orca.keel.model.DeliveryConfig
 import com.netflix.spinnaker.orca.keel.task.ImportDeliveryConfigTask
+import com.netflix.spinnaker.orca.keel.task.ImportDeliveryConfigTask.Companion.UNAUTHORIZED_SCM_ACCESS_MESSAGE
+import com.netflix.spinnaker.orca.keel.task.ImportDeliveryConfigTask.SpringHttpError
 import com.netflix.spinnaker.orca.pipeline.model.DefaultTrigger
-import com.netflix.spinnaker.orca.pipeline.model.Execution
 import com.netflix.spinnaker.orca.pipeline.model.GitTrigger
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.Trigger
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+import com.netflix.spinnaker.orca.pipeline.model.StageExecutionImpl
 import dev.minutest.junit.JUnit5Minutests
 import dev.minutest.rootContext
 import io.mockk.every
 import io.mockk.mockk
+import io.mockk.slot
 import io.mockk.verify
+import org.springframework.http.HttpStatus.BAD_REQUEST
+import org.springframework.http.HttpStatus.FORBIDDEN
 import retrofit.RetrofitError
 import retrofit.client.Response
+import retrofit.converter.JacksonConverter
+import retrofit.mime.TypedInput
 import strikt.api.expectThat
 import strikt.api.expectThrows
+import strikt.assertions.contains
+import strikt.assertions.isA
 import strikt.assertions.isEqualTo
-import java.lang.IllegalArgumentException
+import strikt.assertions.isNotEqualTo
+import strikt.assertions.isNotNull
+import java.time.Instant
+import java.time.temporal.ChronoUnit
 
 internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
   data class ManifestLocation(
@@ -51,13 +68,8 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
   )
 
   data class Fixture(
-    val trigger: Trigger
-  ) {
-    companion object {
-      val objectMapper = ObjectMapper()
-    }
-
-    val manifestLocation = ManifestLocation(
+    val trigger: Trigger,
+    val manifestLocation: ManifestLocation = ManifestLocation(
       repoType = "stash",
       projectKey = "SPKR",
       repositorySlug = "keeldemo",
@@ -65,6 +77,10 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
       manifest = "spinnaker.yml",
       ref = "refs/heads/master"
     )
+  ) {
+    companion object {
+      val objectMapper: ObjectMapper = KeelConfiguration().keelObjectMapper()
+    }
 
     val manifest = mapOf(
       "name" to "keeldemo-manifest",
@@ -81,7 +97,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
 
     val keelService: KeelService = mockk(relaxUnitFun = true) {
       every {
-        publishDeliveryConfig(any(), any())
+        publishDeliveryConfig(any())
       } returns Response("http://keel", 200, "", emptyList(), null)
     }
 
@@ -89,16 +105,46 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
 
     fun execute(context: Map<String, Any?>) =
       subject.execute(
-        Stage(
-          Execution(Execution.ExecutionType.PIPELINE, "keeldemo").also { it.trigger = trigger },
-          Execution.ExecutionType.PIPELINE.toString(),
+        StageExecutionImpl(
+          PipelineExecutionImpl(ExecutionType.PIPELINE, "keeldemo").also { it.trigger = trigger },
+          ExecutionType.PIPELINE.toString(),
           context
         )
       )
+
+    val parsingError = SpringHttpError(
+      status = BAD_REQUEST.value(),
+      error = BAD_REQUEST.reasonPhrase,
+      message = "Parsing error",
+      details = mapOf(
+        "message" to "Parsing error",
+        "path" to listOf(
+          mapOf(
+            "type" to "SomeClass",
+            "field" to "someField"
+          )
+        ),
+        "pathExpression" to ".someField"
+      ),
+      // Jackson writes this as ms-since-epoch, so we need to strip off the nanoseconds, since we'll
+      // be round-tripping it through Jackson before testing for equality.
+      timestamp = Instant.now().truncatedTo(ChronoUnit.MILLIS)
+    )
+
+    val accessDeniedError = SpringHttpError(
+      status = FORBIDDEN.value(),
+      error = FORBIDDEN.reasonPhrase,
+      message = "Access denied",
+      // Jackson writes this as ms-since-epoch, so we need to strip off the nanoseconds, since we'll
+      // be round-tripping it through Jackson before testing for equality.
+      timestamp = Instant.now().truncatedTo(ChronoUnit.MILLIS)
+    )
   }
 
   private fun ManifestLocation.toMap() =
     Fixture.objectMapper.convertValue<Map<String, Any?>>(this).toMutableMap()
+
+  private val objectMapper = Fixture.objectMapper
 
   fun tests() = rootContext<Fixture> {
     context("basic behavior") {
@@ -109,7 +155,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
       }
       test("successfully retrieves manifest from SCM and publishes to keel") {
         val result = execute(manifestLocation.toMap())
-        expectThat(result.status).isEqualTo(ExecutionStatus.SUCCEEDED)
+        expectThat(result.status).isEqualTo(SUCCEEDED)
         verify(exactly = 1) {
           scmService.getDeliveryConfigManifest(
             manifestLocation.repoType,
@@ -121,7 +167,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
           )
         }
         verify(exactly = 1) {
-          keelService.publishDeliveryConfig(manifest, trigger.user!!)
+          keelService.publishDeliveryConfig(manifest)
         }
       }
     }
@@ -135,7 +181,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
 
       context("with required stage context missing") {
         test("throws an exception") {
-          expectThrows<IllegalArgumentException> {
+          expectThrows<InvalidRequestException> {
             execute(manifestLocation.toMap().also { it.remove("repoType") })
           }
         }
@@ -143,12 +189,14 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
 
       context("with optional stage context missing") {
         test("uses defaults to fill in the blanks") {
-          val result = execute(manifestLocation.toMap().also {
-            it.remove("directory")
-            it.remove("manifest")
-            it.remove("ref")
-          })
-          expectThat(result.status).isEqualTo(ExecutionStatus.SUCCEEDED)
+          val result = execute(
+            manifestLocation.toMap().also {
+              it.remove("directory")
+              it.remove("manifest")
+              it.remove("ref")
+            }
+          )
+          expectThat(result.status).isEqualTo(SUCCEEDED)
           verify(exactly = 1) {
             scmService.getDeliveryConfigManifest(
               manifestLocation.repoType,
@@ -180,7 +228,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
       context("with fully-populated stage context") {
         test("disregards trigger and uses context information to retrieve manifest from SCM") {
           val result = execute(manifestLocation.toMap())
-          expectThat(result.status).isEqualTo(ExecutionStatus.SUCCEEDED)
+          expectThat(result.status).isEqualTo(SUCCEEDED)
           verify(exactly = 1) {
             scmService.getDeliveryConfigManifest(
               manifestLocation.repoType,
@@ -196,12 +244,14 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
 
       context("with some missing information in stage context") {
         test("uses trigger information to fill in the blanks") {
-          val result = execute(manifestLocation.toMap().also {
-            it.remove("projectKey")
-            it.remove("repositorySlug")
-            it.remove("ref")
-          })
-          expectThat(result.status).isEqualTo(ExecutionStatus.SUCCEEDED)
+          val result = execute(
+            manifestLocation.toMap().also {
+              it.remove("projectKey")
+              it.remove("repositorySlug")
+              it.remove("ref")
+            }
+          )
+          expectThat(result.status).isEqualTo(SUCCEEDED)
           verify(exactly = 1) {
             scmService.getDeliveryConfigManifest(
               manifestLocation.repoType,
@@ -218,7 +268,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
       context("with no information in stage context") {
         test("uses trigger information and defaults to fill in the blanks") {
           val result = execute(mutableMapOf())
-          expectThat(result.status).isEqualTo(ExecutionStatus.SUCCEEDED)
+          expectThat(result.status).isEqualTo(SUCCEEDED)
           verify(exactly = 1) {
             scmService.getDeliveryConfigManifest(
               (trigger as GitTrigger).source,
@@ -229,6 +279,28 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
               trigger.hash
             )
           }
+        }
+      }
+    }
+
+    context("with detailed git info in payload field") {
+      val trigger = objectMapper.readValue(javaClass.getResource("/trigger.json"), Trigger::class.java)
+      fixture {
+        Fixture(
+          trigger
+        )
+      }
+
+      context("parsing git metadata") {
+        test("parses correctly") {
+          execute(mutableMapOf())
+          val submittedConfig = slot<DeliveryConfig>()
+          verify(exactly = 1) {
+            keelService.publishDeliveryConfig(capture(submittedConfig))
+          }
+          val m: Any = submittedConfig.captured.getOrDefault("metadata", emptyMap<String, Any?>())!!
+          val metadata: Map<String, Any?> = objectMapper.convertValue(m)
+          expectThat(metadata["gitMetadata"]).isNotEqualTo(null)
         }
       }
     }
@@ -252,9 +324,11 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
                 manifestLocation.manifest,
                 manifestLocation.ref
               )
-            } throws RetrofitError.httpError("http://igor",
+            } throws RetrofitError.httpError(
+              "http://igor",
               Response("http://igor", 404, "", emptyList(), null),
-              null, null)
+              null, null
+            )
           }
         }
 
@@ -264,7 +338,7 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
         }
       }
 
-      context("failure to call downstream services") {
+      context("unauthorized access to manifest") {
         modifyFixture {
           with(scmService) {
             every {
@@ -276,9 +350,98 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
                 manifestLocation.manifest,
                 manifestLocation.ref
               )
-            } throws RetrofitError.httpError("http://igor",
+            } throws RetrofitError.httpError(
+              "http://igor",
+              Response("http://igor", 401, "", emptyList(), null),
+              null, null
+            )
+          }
+        }
+
+        test("task fails with a helpful error message") {
+          val result = execute(manifestLocation.toMap())
+          expectThat(result.status).isEqualTo(ExecutionStatus.TERMINAL)
+          expectThat(result.context["error"]).isEqualTo(mapOf("message" to UNAUTHORIZED_SCM_ACCESS_MESSAGE))
+        }
+      }
+
+      context("keel access denied error") {
+        modifyFixture {
+          with(scmService) {
+            every {
+              getDeliveryConfigManifest(
+                manifestLocation.repoType,
+                manifestLocation.projectKey,
+                manifestLocation.repositorySlug,
+                manifestLocation.directory,
+                manifestLocation.manifest,
+                manifestLocation.ref
+              )
+            } throws RetrofitError.httpError(
+              "http://keel",
+              Response(
+                "http://keel", 403, "", emptyList(),
+                JacksonConverter(objectMapper).toBody(accessDeniedError) as TypedInput
+              ),
+              null, null
+            )
+          }
+        }
+
+        test("task fails and includes the error details returned by keel") {
+          val result = execute(manifestLocation.toMap())
+          expectThat(result.status).isEqualTo(ExecutionStatus.TERMINAL)
+          expectThat(result.context["error"]).isA<SpringHttpError>().isEqualTo(accessDeniedError)
+        }
+      }
+
+      context("delivery config parsing error") {
+        modifyFixture {
+          with(scmService) {
+            every {
+              getDeliveryConfigManifest(
+                manifestLocation.repoType,
+                manifestLocation.projectKey,
+                manifestLocation.repositorySlug,
+                manifestLocation.directory,
+                manifestLocation.manifest,
+                manifestLocation.ref
+              )
+            } throws RetrofitError.httpError(
+              "http://keel",
+              Response(
+                "http://keel", 400, "", emptyList(),
+                JacksonConverter(objectMapper).toBody(parsingError) as TypedInput
+              ),
+              null, null
+            )
+          }
+        }
+
+        test("task fails and includes the error details returned by keel") {
+          val result = execute(manifestLocation.toMap())
+          expectThat(result.status).isEqualTo(ExecutionStatus.TERMINAL)
+          expectThat(result.context["error"]).isA<SpringHttpError>().isEqualTo(parsingError)
+        }
+      }
+
+      context("retryable failure to call downstream services") {
+        modifyFixture {
+          with(scmService) {
+            every {
+              getDeliveryConfigManifest(
+                manifestLocation.repoType,
+                manifestLocation.projectKey,
+                manifestLocation.repositorySlug,
+                manifestLocation.directory,
+                manifestLocation.manifest,
+                manifestLocation.ref
+              )
+            } throws RetrofitError.httpError(
+              "http://igor",
               Response("http://igor", 503, "", emptyList(), null),
-              null, null)
+              null, null
+            )
           }
         }
 
@@ -294,6 +457,41 @@ internal class ImportDeliveryConfigTaskTests : JUnit5Minutests {
         test("task fails if max retries reached") {
           val result = execute(manifestLocation.toMap().also { it["attempt"] = ImportDeliveryConfigTask.MAX_RETRIES })
           expectThat(result.status).isEqualTo(ExecutionStatus.TERMINAL)
+        }
+
+        test("task result context includes the error from the last attempt") {
+          var result: TaskResult? = null
+          for (attempt in 1..ImportDeliveryConfigTask.MAX_RETRIES) {
+            result = execute(manifestLocation.toMap().also { it["attempt"] = attempt })
+          }
+          expectThat(result!!.context["errorFromLastAttempt"]).isNotNull()
+          expectThat(result!!.context["error"] as String).contains(result!!.context["errorFromLastAttempt"] as String)
+        }
+      }
+    }
+
+    context("malformed input") {
+      fixture {
+        Fixture(
+          trigger = DefaultTrigger("manual"),
+          manifestLocation = ManifestLocation(
+            repoType = "stash",
+            projectKey = "SPKR",
+            repositorySlug = "keeldemo",
+            directory = ".",
+            manifest = "",
+            ref = "refs/heads/master"
+          )
+        )
+      }
+
+      test("successfully retrieves manifest from SCM and publishes to keel") {
+        val result = execute(manifestLocation.toMap())
+
+        expectThat(result.status) isEqualTo SUCCEEDED
+
+        verify(exactly = 1) {
+          scmService.getDeliveryConfigManifest(any(), any(), any(), any(), "spinnaker.yml", any())
         }
       }
     }

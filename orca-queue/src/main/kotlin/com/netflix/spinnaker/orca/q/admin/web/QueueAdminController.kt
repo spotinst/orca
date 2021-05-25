@@ -15,24 +15,37 @@
  */
 package com.netflix.spinnaker.orca.q.admin.web
 
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.StartWaitingExecutions
+import com.netflix.spinnaker.orca.q.ZombieExecutionService
 import com.netflix.spinnaker.orca.q.admin.HydrateQueueCommand
 import com.netflix.spinnaker.orca.q.admin.HydrateQueueInput
 import com.netflix.spinnaker.orca.q.admin.HydrateQueueOutput
 import com.netflix.spinnaker.q.Message
 import com.netflix.spinnaker.q.Queue
-import org.springframework.web.bind.annotation.RequestMapping
+import java.lang.IllegalStateException
+import java.time.Duration
+import java.time.Instant
+import java.util.Optional
+import javassist.NotFoundException
+import javax.ws.rs.QueryParam
+import org.springframework.http.HttpStatus
+import org.springframework.web.bind.annotation.PathVariable
 import org.springframework.web.bind.annotation.PostMapping
 import org.springframework.web.bind.annotation.RequestBody
+import org.springframework.web.bind.annotation.RequestMapping
+import org.springframework.web.bind.annotation.ResponseStatus
 import org.springframework.web.bind.annotation.RestController
-import java.time.Instant
-import javax.ws.rs.QueryParam
 
 @RestController
 @RequestMapping("/admin/queue")
 class QueueAdminController(
   private val hydrateCommand: HydrateQueueCommand,
-  private val queue: Queue
+  private val zombieExecutionService: Optional<ZombieExecutionService>,
+  private val queue: Queue,
+  private val executionRepository: ExecutionRepository
 ) {
 
   @PostMapping(value = ["/hydrate"])
@@ -42,12 +55,32 @@ class QueueAdminController(
     @QueryParam("startMs") startMs: Long?,
     @QueryParam("endMs") endMs: Long?
   ): HydrateQueueOutput =
-    hydrateCommand(HydrateQueueInput(
-      executionId,
-      if (startMs != null) Instant.ofEpochMilli(startMs) else null,
-      if (endMs != null) Instant.ofEpochMilli(endMs) else null,
-      dryRun ?: true
-    ))
+    hydrateCommand(
+      HydrateQueueInput(
+        executionId,
+        if (startMs != null) Instant.ofEpochMilli(startMs) else null,
+        if (endMs != null) Instant.ofEpochMilli(endMs) else null,
+        dryRun ?: true
+      )
+    )
+
+  @PostMapping(value = ["/zombies:kill"])
+  fun killZombies(@QueryParam("minimumActivity") minimumActivity: Long?) {
+    getZombieExecutionService().killZombies(Duration.ofMinutes(minimumActivity ?: 60))
+  }
+
+  @PostMapping(value = ["/zombies/{executionId}:kill"])
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  fun killZombie(@PathVariable executionId: String) {
+    getZombieExecutionService().killZombie(getPipelineOrOrchestration(executionId))
+  }
+
+  @PostMapping(value = ["/zombies/application/{application}:kill"])
+  @ResponseStatus(HttpStatus.NO_CONTENT)
+  fun killApplicationZombies(@PathVariable application: String,
+                             @QueryParam("minimumActivity") minimumActivity: Long?) {
+    getZombieExecutionService().killZombies(application, Duration.ofMinutes(minimumActivity ?: 60))
+  }
 
   /**
    * Posts StartWaitingExecutions message for the given pipeline message into the queue.
@@ -82,5 +115,21 @@ class QueueAdminController(
     @RequestBody message: Message
   ) {
     queue.push(message)
+  }
+
+  private fun getZombieExecutionService(): ZombieExecutionService =
+    zombieExecutionService
+      .orElseThrow {
+        IllegalStateException(
+          "Zombie management is unavailable. This is likely due to the queue not being enabled on this instance."
+        )
+      }
+
+  private fun getPipelineOrOrchestration(executionId: String): PipelineExecution {
+    return try {
+      executionRepository.retrieve(ExecutionType.PIPELINE, executionId)
+    } catch (e: NotFoundException) {
+      executionRepository.retrieve(ExecutionType.ORCHESTRATION, executionId)
+    }
   }
 }

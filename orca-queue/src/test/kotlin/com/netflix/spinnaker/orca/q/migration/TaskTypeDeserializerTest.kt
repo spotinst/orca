@@ -19,16 +19,17 @@ package com.netflix.spinnaker.orca.q.migration
 import com.fasterxml.jackson.databind.ObjectMapper
 import com.fasterxml.jackson.databind.module.SimpleModule
 import com.fasterxml.jackson.module.kotlin.KotlinModule
-import com.netflix.spinnaker.orca.Task
 import com.netflix.spinnaker.orca.TaskResolver
-import com.netflix.spinnaker.orca.TaskResult
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.api.pipeline.Task
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.q.TasksProvider
 import org.assertj.core.api.Assertions
 import org.jetbrains.spek.api.Spek
 import org.jetbrains.spek.api.dsl.describe
 
 object TaskTypeDeserializerTest : Spek({
-  val taskResolver = TaskResolver(listOf(DummyTask()), false)
+  val taskResolver = TaskResolver(TasksProvider(listOf(DummyTask())), false)
 
   val objectMapper = ObjectMapper().apply {
     registerModule(KotlinModule())
@@ -39,17 +40,20 @@ object TaskTypeDeserializerTest : Spek({
   }
 
   describe("when 'taskType' is deserialized") {
-    val canonicalJson = """{ "taskType" : "${DummyTask::class.java.canonicalName}" }"""
+    val canonicalJson =
+      """{ "taskType" : "${DummyTask::class.java.canonicalName}" }"""
     Assertions.assertThat(
       objectMapper.readValue(canonicalJson, Target::class.java).taskType
     ).isEqualTo(DummyTask::class.java)
 
-    val aliasedJson = """{ "taskType" : "anotherTaskAlias" }"""
+    val aliasedJson =
+      """{ "taskType" : "anotherTaskAlias" }"""
     Assertions.assertThat(
       objectMapper.readValue(aliasedJson, Target::class.java).taskType
     ).isEqualTo(DummyTask::class.java)
 
-    val notTaskTypeJson = """{ "notTaskType" : "java.lang.String" }"""
+    val notTaskTypeJson =
+      """{ "notTaskType" : "java.lang.String" }"""
     Assertions.assertThat(
       objectMapper.readValue(notTaskTypeJson, Target::class.java).notTaskType
     ).isEqualTo(String::class.java)
@@ -60,7 +64,7 @@ class Target(val taskType: Class<*>?, val notTaskType: Class<*>?)
 
 @Task.Aliases("anotherTaskAlias")
 class DummyTask : Task {
-  override fun execute(stage: Stage): TaskResult {
+  override fun execute(stage: StageExecution): TaskResult {
     return TaskResult.SUCCEEDED
   }
 }

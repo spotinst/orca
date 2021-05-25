@@ -21,18 +21,18 @@ import com.netflix.spinnaker.fiat.model.UserPermission
 import com.netflix.spinnaker.fiat.model.resources.Role
 import com.netflix.spinnaker.fiat.shared.FiatService
 import com.netflix.spinnaker.fiat.shared.FiatStatus
+import com.netflix.spinnaker.kork.exceptions.ConfigurationException
 import com.netflix.spinnaker.kork.exceptions.SpinnakerException
-import com.netflix.spinnaker.kork.web.exceptions.InvalidRequestException
-import com.netflix.spinnaker.kork.web.exceptions.ValidationException
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.Trigger
 import com.netflix.spinnaker.orca.clouddriver.service.JobService
 import com.netflix.spinnaker.orca.exceptions.OperationFailedException
+import com.netflix.spinnaker.orca.exceptions.PipelineTemplateValidationException
 import com.netflix.spinnaker.orca.extensionpoint.pipeline.ExecutionPreprocessor
 import com.netflix.spinnaker.orca.front50.Front50Service
 import com.netflix.spinnaker.orca.front50.PipelineModelMutator
 import com.netflix.spinnaker.orca.igor.BuildService
 import com.netflix.spinnaker.orca.pipeline.ExecutionLauncher
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Trigger
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionNotFoundException
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ArtifactUtils
@@ -43,19 +43,15 @@ import com.netflix.spinnaker.security.AuthenticatedRequest
 import groovy.util.logging.Slf4j
 import javassist.NotFoundException
 import org.springframework.beans.factory.annotation.Autowired
-import org.springframework.web.bind.annotation.PathVariable
-import org.springframework.web.bind.annotation.RequestBody
-import org.springframework.web.bind.annotation.RequestMapping
-import org.springframework.web.bind.annotation.RequestMethod
-import org.springframework.web.bind.annotation.RestController
+import org.springframework.web.bind.annotation.*
 import retrofit.RetrofitError
 import retrofit.http.Query
 
 import javax.servlet.http.HttpServletResponse
 
-import static java.net.HttpURLConnection.HTTP_NOT_FOUND;
-import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.ORCHESTRATION
-import static com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.ORCHESTRATION
+import static com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import static java.net.HttpURLConnection.HTTP_NOT_FOUND
 import static net.logstash.logback.argument.StructuredArguments.value
 
 @RestController
@@ -170,6 +166,7 @@ class OperationsController {
   }
 
   private Map<String, Object> orchestratePipeline(Map pipeline) {
+    long startTime = System.currentTimeMillis()
     def request = objectMapper.writeValueAsString(pipeline)
 
     Exception pipelineError = null
@@ -188,7 +185,12 @@ class OperationsController {
 
     if (pipelineError == null) {
       def id = startPipeline(processedPipeline)
-      log.info("Started pipeline {} based on request body {}", id, request)
+      log.info(
+          "Started pipeline {} based on request body {} (took: {}ms)",
+          id,
+          request,
+          System.currentTimeMillis() - startTime
+      )
       return [ref: "/pipelines/" + id]
     } else {
       def id = markPipelineFailed(processedPipeline, pipelineError)
@@ -240,7 +242,7 @@ class OperationsController {
     }
 
     if (pipeline.disabled) {
-      throw new InvalidRequestException("Pipeline is disabled and cannot be started.")
+      throw new ConfigurationException("Pipeline is disabled and cannot be started.")
     }
 
     def linear = pipeline.stages.every { it.refId == null }
@@ -249,7 +251,7 @@ class OperationsController {
     }
 
     if (pipeline.errors != null) {
-      throw new ValidationException("Pipeline template is invalid", pipeline.errors as List<Map<String, Object>>)
+      throw new PipelineTemplateValidationException("Pipeline template is invalid", pipeline.errors as List<Map<String, Object>>)
     }
     return pipeline
   }
@@ -283,7 +285,7 @@ class OperationsController {
     }
 
     if (pipeline.trigger.parentPipelineId && !pipeline.trigger.parentExecution) {
-      Execution parentExecution
+      PipelineExecution parentExecution
       try {
         parentExecution = executionRepository.retrieve(PIPELINE, pipeline.trigger.parentPipelineId)
       } catch (ExecutionNotFoundException e) {
@@ -328,7 +330,7 @@ class OperationsController {
         buildInfo = buildService.getBuild(trigger.buildNumber, trigger.master, trigger.job)
       } catch (RetrofitError e) {
         if (e.response?.status == 404) {
-          throw new IllegalStateException("Build ${trigger.buildNumber} of ${trigger.master}/${trigger.job} not found")
+          throw new ConfigurationException("Build ${trigger.buildNumber} of ${trigger.master}/${trigger.job} not found")
         } else {
           throw new OperationFailedException("Failed to get build ${trigger.buildNumber} of ${trigger.master}/${trigger.job}", e)
         }
@@ -349,7 +351,7 @@ class OperationsController {
           )
         } catch (RetrofitError e) {
           if (e.response?.status == 404) {
-            throw new IllegalStateException("Expected properties file " + trigger.propertyFile + " (configured on trigger), but it was missing")
+            throw new ConfigurationException("Expected properties file " + trigger.propertyFile + " (configured on trigger), but it was missing")
           } else {
             throw new OperationFailedException("Failed to get properties file ${trigger.propertyFile}", e)
           }
@@ -412,15 +414,17 @@ class OperationsController {
     if (!jobService) {
       return []
     }
-    return jobService?.getPreconfiguredStages().collect{
-      [ label: it.label,
-        description: it.description,
-        type: it.type,
-        waitForCompletion: it.waitForCompletion,
-        noUserConfigurableFields: true,
-        parameters: it.parameters,
-        producesArtifacts: it.producesArtifacts,
-      ]
+    // Only allow enabled jobs for configuration in pipelines.
+    return jobService.getPreconfiguredStages().findAll { it.enabled } .collect {
+        [label                   : it.label,
+         description             : it.description,
+         type                    : it.type,
+         waitForCompletion       : it.waitForCompletion,
+         noUserConfigurableFields: true,
+         parameters              : it.parameters,
+         producesArtifacts       : it.producesArtifacts,
+         uiType                  : it.uiType
+        ]
     }
   }
 
@@ -464,9 +468,25 @@ class OperationsController {
     }
 
     def json = objectMapper.writeValueAsString(config)
-    log.info('requested task:{}', json)
-    def pipeline = executionLauncher.start(ORCHESTRATION, json)
+    def pipeline = null
+    try {
+      pipeline = executionLauncher.start(ORCHESTRATION, json)
+    } finally {
+      log.info('started execution {} from requested task: {}', pipeline?.id, renderForLogs(json))
+    }
     [ref: "/tasks/${pipeline.id}".toString()]
+  }
+
+  private String renderForLogs(String json) {
+    if (!log.isInfoEnabled()) {
+      return
+    }
+
+    if (json.length() < 1_000_000) {
+      return "(length: ${json.length()}) " + json
+    }
+
+    return "(original length: ${json.length()}, truncated to first and last 50k) " +json[0..50_000] + " (...) " + json[-50_000..-1]
   }
 
   private void injectPipelineOrigin(Map pipeline) {

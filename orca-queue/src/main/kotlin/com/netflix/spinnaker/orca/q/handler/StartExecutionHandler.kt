@@ -16,14 +16,14 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
 import com.netflix.spinnaker.orca.events.ExecutionComplete
 import com.netflix.spinnaker.orca.events.ExecutionStarted
 import com.netflix.spinnaker.orca.ext.initialStages
-import com.netflix.spinnaker.orca.pipeline.model.Execution
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CancelExecution
 import com.netflix.spinnaker.orca.q.StartExecution
@@ -31,14 +31,14 @@ import com.netflix.spinnaker.orca.q.StartStage
 import com.netflix.spinnaker.orca.q.StartWaitingExecutions
 import com.netflix.spinnaker.orca.q.pending.PendingExecutionService
 import com.netflix.spinnaker.q.Queue
+import java.time.Clock
+import java.time.Instant
 import net.logstash.logback.argument.StructuredArguments.value
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
-import java.time.Clock
-import java.time.Instant
 
 @Component
 class StartExecutionHandler(
@@ -70,48 +70,56 @@ class StartExecutionHandler(
     }
   }
 
-  private fun start(execution: Execution) {
+  private fun start(execution: PipelineExecution) {
     if (execution.isAfterStartTimeExpiry()) {
-      log.warn("Execution (type ${execution.type}, id {}, application: {}) start was canceled because" +
-        "start time would be after defined start time expiry (now: ${clock.millis()}, expiry: ${execution.startTimeExpiry})",
+      log.warn(
+        "Execution (type ${execution.type}, id {}, application: {}) start was canceled because" +
+          "start time would be after defined start time expiry (now: ${clock.millis()}, expiry: ${execution.startTimeExpiry})",
         value("executionId", execution.id),
-        value("application", execution.application))
-      queue.push(CancelExecution(
-        execution.type,
-        execution.id,
-        execution.application,
-        "spinnaker",
-        "Could not begin execution before start time expiry"
-      ))
+        value("application", execution.application)
+      )
+      queue.push(
+        CancelExecution(
+          execution.type,
+          execution.id,
+          execution.application,
+          "spinnaker",
+          "Could not begin execution before start time expiry"
+        )
+      )
     } else {
       val initialStages = execution.initialStages()
       if (initialStages.isEmpty()) {
         log.warn("No initial stages found (executionId: ${execution.id})")
-        repository.updateStatus(execution.type, execution.id, TERMINAL)
-        publisher.publishEvent(ExecutionComplete(this, execution.type, execution.id, TERMINAL))
+        execution.updateStatus(TERMINAL)
+        repository.updateStatus(execution)
+        publisher.publishEvent(ExecutionComplete(this, execution))
       } else {
-        repository.updateStatus(execution.type, execution.id, RUNNING)
+        execution.updateStatus(RUNNING)
+        repository.updateStatus(execution)
         initialStages.forEach { queue.push(StartStage(it)) }
-        publisher.publishEvent(ExecutionStarted(this, execution.type, execution.id))
+        publisher.publishEvent(ExecutionStarted(this, execution))
       }
     }
   }
 
-  private fun terminate(execution: Execution) {
+  private fun terminate(execution: PipelineExecution) {
     if (execution.status == CANCELED || execution.isCanceled) {
-      publisher.publishEvent(ExecutionComplete(this, execution.type, execution.id, execution.status))
+      publisher.publishEvent(ExecutionComplete(this, execution))
       execution.pipelineConfigId?.let {
         queue.push(StartWaitingExecutions(it, purgeQueue = !execution.isKeepWaitingPipelines))
       }
     } else {
-      log.warn("Execution (type: ${execution.type}, id: {}, status: ${execution.status}, application: {})" +
-        " cannot be started unless state is NOT_STARTED. Ignoring StartExecution message.",
+      log.warn(
+        "Execution (type: ${execution.type}, id: {}, status: ${execution.status}, application: {})" +
+          " cannot be started unless state is NOT_STARTED. Ignoring StartExecution message.",
         value("executionId", execution.id),
-        value("application", execution.application))
+        value("application", execution.application)
+      )
     }
   }
 
-  private fun Execution.isAfterStartTimeExpiry() =
+  private fun PipelineExecution.isAfterStartTimeExpiry() =
     startTimeExpiry
       ?.let { Instant.ofEpochMilli(it) }
       ?.isBefore(clock.instant()) ?: false

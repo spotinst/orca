@@ -16,24 +16,24 @@
 
 package com.netflix.spinnaker.orca.kayenta.pipeline
 
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.ext.mapTo
-import com.netflix.spinnaker.orca.fixture.stage
 import com.netflix.spinnaker.orca.kayenta.CanaryScope
 import com.netflix.spinnaker.orca.pipeline.WaitStage
-import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Stage
+import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilderImpl
 import com.netflix.spinnaker.spek.and
 import com.netflix.spinnaker.spek.values
 import com.netflix.spinnaker.spek.where
 import com.netflix.spinnaker.time.fixedClock
+import java.time.Duration
+import java.time.temporal.ChronoUnit.HOURS
+import java.time.temporal.ChronoUnit.MINUTES
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.Spek
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
 import org.jetbrains.spek.api.dsl.it
-import java.time.Duration
-import java.time.temporal.ChronoUnit.HOURS
-import java.time.temporal.ChronoUnit.MINUTES
 
 object RunCanaryIntervalsStageTest : Spek({
 
@@ -54,18 +54,20 @@ object RunCanaryIntervalsStageTest : Spek({
           name = "Run Kayenta Canary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021",
-              "startTimeIso" to clock.instant().toString(),
-              "endTimeIso" to clock.instant().plus(4, HOURS).toString()
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021",
+                "startTimeIso" to clock.instant().toString(),
+                "endTimeIso" to clock.instant().plus(4, HOURS).toString()
+              )
+            ),
             "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
             "beginCanaryAnalysisAfterMins" to beginCanaryAnalysisAfterMins
           )
         }
 
-        val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+        val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
           .let { graph ->
             builder.beforeStages(kayentaCanaryStage, graph)
             graph.build()
@@ -101,12 +103,14 @@ object RunCanaryIntervalsStageTest : Spek({
           name = "Run Kayenta Canary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021",
-              "startTimeIso" to clock.instant().toString(),
-              "endTimeIso" to clock.instant().plus(4, HOURS).toString()
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021",
+                "startTimeIso" to clock.instant().toString(),
+                "endTimeIso" to clock.instant().plus(4, HOURS).toString()
+              )
+            ),
             "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
             "beginCanaryAnalysisAfterMins" to warmupMins,
             "canaryAnalysisIntervalMins" to intervalMins,
@@ -114,7 +118,7 @@ object RunCanaryIntervalsStageTest : Spek({
           )
         }
 
-        val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+        val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
           .let { graph ->
             builder.beforeStages(kayentaCanaryStage, graph)
             graph.build()
@@ -163,10 +167,12 @@ object RunCanaryIntervalsStageTest : Spek({
             name = "Run Kayenta Canary"
             context["canaryConfig"] = mapOf(
               "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-              "scopes" to listOf(mapOf(
-                "controlScope" to "myapp-v010",
-                "experimentScope" to "myapp-v021"
-              )),
+              "scopes" to listOf(
+                mapOf(
+                  "controlScope" to "myapp-v010",
+                  "experimentScope" to "myapp-v021"
+                )
+              ),
               "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
               "lifetimeHours" to "1",
               "beginCanaryAnalysisAfterMins" to warmupMins
@@ -174,7 +180,7 @@ object RunCanaryIntervalsStageTest : Spek({
           }
 
           val builder = RunCanaryIntervalsStage(clock)
-          val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+          val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
             .let { graph ->
               builder.beforeStages(kayentaCanaryStage, graph)
               graph.build()
@@ -231,10 +237,12 @@ object RunCanaryIntervalsStageTest : Spek({
           name = "Run Kayenta Canary"
           context["canaryConfig"] = mapOf(
             "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-            "scopes" to listOf(mapOf(
-              "controlScope" to "myapp-v010",
-              "experimentScope" to "myapp-v021"
-            )),
+            "scopes" to listOf(
+              mapOf(
+                "controlScope" to "myapp-v010",
+                "experimentScope" to "myapp-v021"
+              )
+            ),
             "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
             "beginCanaryAnalysisAfterMins" to warmupMins,
             "canaryAnalysisIntervalMins" to intervalMins,
@@ -243,7 +251,7 @@ object RunCanaryIntervalsStageTest : Spek({
           )
         }
 
-        val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+        val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
           .let { graph ->
             builder.beforeStages(kayentaCanaryStage, graph)
             graph.build()
@@ -316,10 +324,12 @@ object RunCanaryIntervalsStageTest : Spek({
             name = "Run Kayenta Canary"
             context["canaryConfig"] = mapOf(
               "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-              "scopes" to listOf(mapOf(
-                "controlScope" to "myapp-v010",
-                "experimentScope" to "myapp-v021"
-              )),
+              "scopes" to listOf(
+                mapOf(
+                  "controlScope" to "myapp-v010",
+                  "experimentScope" to "myapp-v021"
+                )
+              ),
               "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
               "lifetimeHours" to "1",
               "baselineAnalysisOffsetInMins" to baselineOffsetMins,
@@ -328,7 +338,7 @@ object RunCanaryIntervalsStageTest : Spek({
           }
 
           val builder = RunCanaryIntervalsStage(clock)
-          val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+          val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
             .let { graph ->
               builder.beforeStages(kayentaCanaryStage, graph)
               graph.build()
@@ -357,12 +367,14 @@ object RunCanaryIntervalsStageTest : Spek({
             name = "Run Kayenta Canary"
             context["canaryConfig"] = mapOf(
               "canaryConfigId" to "MySampleStackdriverCanaryConfig",
-              "scopes" to listOf(mapOf(
-                "controlScope" to "myapp-v010",
-                "experimentScope" to "myapp-v021",
-                "startTimeIso" to clock.instant().toString(),
-                "endTimeIso" to clock.instant().plus(4, HOURS).toString()
-              )),
+              "scopes" to listOf(
+                mapOf(
+                  "controlScope" to "myapp-v010",
+                  "experimentScope" to "myapp-v021",
+                  "startTimeIso" to clock.instant().toString(),
+                  "endTimeIso" to clock.instant().plus(4, HOURS).toString()
+                )
+              ),
               "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
               "lifetimeHours" to "1",
               "baselineAnalysisOffsetInMins" to baselineOffsetMins,
@@ -371,7 +383,7 @@ object RunCanaryIntervalsStageTest : Spek({
           }
 
           val builder = RunCanaryIntervalsStage(clock)
-          val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+          val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
             .let { graph ->
               builder.beforeStages(kayentaCanaryStage, graph)
               graph.build()
@@ -395,19 +407,21 @@ object RunCanaryIntervalsStageTest : Spek({
         context["canaryConfig"] = mapOf(
           "metricsAccountName" to "atlas-acct-1",
           "canaryConfigId" to "MySampleAtlasCanaryConfig",
-          "scopes" to listOf(mapOf(
-            "controlScope" to "some.host.node",
-            "experimentScope" to "some.other.host.node",
-            "step" to 60,
-            "extendedScopeParams" to attributes
-          )),
+          "scopes" to listOf(
+            mapOf(
+              "controlScope" to "some.host.node",
+              "experimentScope" to "some.other.host.node",
+              "step" to 60,
+              "extendedScopeParams" to attributes
+            )
+          ),
           "scoreThresholds" to mapOf("marginal" to 75, "pass" to 90),
           "canaryAnalysisIntervalMins" to 6.hoursInMinutes,
           "lifetimeHours" to "12"
         )
       }
 
-      val aroundStages = StageGraphBuilder.beforeStages(kayentaCanaryStage)
+      val aroundStages = StageGraphBuilderImpl.beforeStages(kayentaCanaryStage)
         .let { graph ->
           builder.beforeStages(kayentaCanaryStage, graph)
           graph.build()
@@ -440,14 +454,14 @@ data class CanaryRanges(
 /**
  * Get [scopeName] control scope from all [RunCanaryPipelineStage]s.
  */
-fun Iterable<Stage>.controlScopes(scopeName: String = "default"): List<CanaryScope> =
+fun Iterable<StageExecution>.controlScopes(scopeName: String = "default"): List<CanaryScope> =
   filter { it.type == RunCanaryPipelineStage.STAGE_TYPE }
     .map { it.mapTo<CanaryScope>("/scopes/$scopeName/controlScope") }
 
 /**
  * Get wait time from any [WaitStage]s.
  */
-fun List<Stage>.waitTimes(): List<Long> =
+fun List<StageExecution>.waitTimes(): List<Long> =
   filter { it.type == "wait" }
     .map { it.mapTo<Long>("/waitTime") }
 

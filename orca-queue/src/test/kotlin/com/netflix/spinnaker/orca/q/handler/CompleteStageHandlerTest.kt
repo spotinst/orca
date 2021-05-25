@@ -17,34 +17,31 @@
 package com.netflix.spinnaker.orca.q.handler
 
 import com.netflix.spectator.api.NoopRegistry
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.STOPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
-import com.netflix.spinnaker.orca.StageResolver
-import com.netflix.spinnaker.orca.api.SimpleStage
-import com.netflix.spinnaker.orca.api.SimpleStageInput
-import com.netflix.spinnaker.orca.api.SimpleStageOutput
-import com.netflix.spinnaker.orca.api.SimpleStageStatus
+import com.netflix.spinnaker.orca.DefaultStageResolver
+import com.netflix.spinnaker.orca.NoOpTaskImplementationResolver
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner.STAGE_AFTER
+import com.netflix.spinnaker.orca.api.pipeline.SyntheticStageOwner.STAGE_BEFORE
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageGraphBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
+import com.netflix.spinnaker.orca.api.test.task
 import com.netflix.spinnaker.orca.events.StageComplete
 import com.netflix.spinnaker.orca.exceptions.DefaultExceptionHandler
 import com.netflix.spinnaker.orca.exceptions.ExceptionHandler
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.fixture.task
 import com.netflix.spinnaker.orca.pipeline.DefaultStageDefinitionBuilderFactory
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.TaskNode
 import com.netflix.spinnaker.orca.pipeline.expressions.PipelineExpressionEvaluator
-import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner.STAGE_AFTER
-import com.netflix.spinnaker.orca.pipeline.model.SyntheticStageOwner.STAGE_BEFORE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.pipeline.util.ContextParameterProcessor
 import com.netflix.spinnaker.orca.pipeline.util.StageNavigator
@@ -54,6 +51,7 @@ import com.netflix.spinnaker.orca.q.CompleteStage
 import com.netflix.spinnaker.orca.q.ContinueParentStage
 import com.netflix.spinnaker.orca.q.DummyTask
 import com.netflix.spinnaker.orca.q.RunTask
+import com.netflix.spinnaker.orca.q.StageDefinitionBuildersProvider
 import com.netflix.spinnaker.orca.q.StartStage
 import com.netflix.spinnaker.orca.q.buildAfterStages
 import com.netflix.spinnaker.orca.q.buildBeforeStages
@@ -83,6 +81,7 @@ import com.nhaarman.mockito_kotlin.times
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyZeroInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.time.Duration.ZERO
 import org.assertj.core.api.Assertions.assertThat
 import org.assertj.core.api.Assertions.fail
 import org.jetbrains.spek.api.dsl.context
@@ -93,7 +92,6 @@ import org.jetbrains.spek.api.dsl.on
 import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
 import org.jetbrains.spek.subject.SubjectSpek
 import org.springframework.context.ApplicationEventPublisher
-import java.time.Duration.ZERO
 
 object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
 
@@ -106,16 +104,18 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
   val registry = NoopRegistry()
   val contextParameterProcessor: ContextParameterProcessor = mock()
 
-  val emptyStage = object : StageDefinitionBuilder {}
+  val emptyStage = object : StageDefinitionBuilder {
+    override fun getType() = "emptyStage"
+  }
 
   val stageWithTaskAndAfterStages = object : StageDefinitionBuilder {
     override fun getType() = "stageWithTaskAndAfterStages"
 
-    override fun taskGraph(stage: Stage, builder: TaskNode.Builder) {
+    override fun taskGraph(stage: StageExecution, builder: TaskNode.Builder) {
       builder.withTask("dummy", DummyTask::class.java)
     }
 
-    override fun afterStages(parent: Stage, graph: StageGraphBuilder) {
+    override fun afterStages(parent: StageExecution, graph: StageGraphBuilder) {
       graph.add {
         it.type = singleTaskStage.type
         it.name = "After Stage"
@@ -127,11 +127,11 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
   val stageThatBlowsUpPlanningAfterStages = object : StageDefinitionBuilder {
     override fun getType() = "stageThatBlowsUpPlanningAfterStages"
 
-    override fun taskGraph(stage: Stage, builder: TaskNode.Builder) {
+    override fun taskGraph(stage: StageExecution, builder: TaskNode.Builder) {
       builder.withTask("dummy", DummyTask::class.java)
     }
 
-    override fun afterStages(parent: Stage, graph: StageGraphBuilder) {
+    override fun afterStages(parent: StageExecution, graph: StageGraphBuilder) {
       throw RuntimeException("there is some problem actually")
     }
   }
@@ -139,29 +139,11 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
   val stageWithNothingButAfterStages = object : StageDefinitionBuilder {
     override fun getType() = "stageWithNothingButAfterStages"
 
-    override fun afterStages(parent: Stage, graph: StageGraphBuilder) {
+    override fun afterStages(parent: StageExecution, graph: StageGraphBuilder) {
       graph.add {
         it.type = singleTaskStage.type
         it.name = "After Stage"
       }
-    }
-  }
-
-  val emptyApiStage = object : SimpleStage<Any> {
-    override fun getName() = "emptyApiStage"
-
-    override fun execute(simpleStageInput: SimpleStageInput<Any>): SimpleStageOutput<Any, Any> {
-      return SimpleStageOutput()
-    }
-  }
-
-  val successfulApiStage = object : SimpleStage<Any> {
-    override fun getName() = "successfulApiStage"
-
-    override fun execute(simpleStageInput: SimpleStageInput<Any>): SimpleStageOutput<Any, Any> {
-      val output = SimpleStageOutput<Any, Any>()
-      output.status = SimpleStageStatus.SUCCEEDED
-      return output
     }
   }
 
@@ -176,23 +158,21 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
       contextParameterProcessor,
       registry,
       DefaultStageDefinitionBuilderFactory(
-        StageResolver(
-          listOf(
-            singleTaskStage,
-            multiTaskStage,
-            stageWithSyntheticBefore,
-            stageWithSyntheticAfter,
-            stageWithParallelBranches,
-            stageWithTaskAndAfterStages,
-            stageThatBlowsUpPlanningAfterStages,
-            stageWithSyntheticOnFailure,
-            stageWithNothingButAfterStages,
-            stageWithSyntheticOnFailure,
-            emptyStage
-          ),
-          listOf(
-            emptyApiStage,
-            successfulApiStage
+        DefaultStageResolver(
+          StageDefinitionBuildersProvider(
+            listOf(
+              singleTaskStage,
+              multiTaskStage,
+              stageWithSyntheticBefore,
+              stageWithSyntheticAfter,
+              stageWithParallelBranches,
+              stageWithTaskAndAfterStages,
+              stageThatBlowsUpPlanningAfterStages,
+              stageWithSyntheticOnFailure,
+              stageWithNothingButAfterStages,
+              stageWithSyntheticOnFailure,
+              emptyStage
+            )
           )
         )
       )
@@ -259,10 +239,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("updates the stage state") {
-            verify(repository).storeStage(check {
-              assertThat(it.status).isEqualTo(taskStatus)
-              assertThat(it.endTime).isEqualTo(clock.millis())
-            })
+            verify(repository).storeStage(
+              check {
+                assertThat(it.status).isEqualTo(taskStatus)
+                assertThat(it.endTime).isEqualTo(clock.millis())
+              }
+            )
           }
 
           it("completes the execution") {
@@ -274,12 +256,14 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("publishes an event") {
-            verify(publisher).publishEvent(check<StageComplete> {
-              assertThat(it.executionType).isEqualTo(pipeline.type)
-              assertThat(it.executionId).isEqualTo(pipeline.id)
-              assertThat(it.stageId).isEqualTo(message.stageId)
-              assertThat(it.status).isEqualTo(taskStatus)
-            })
+            verify(publisher).publishEvent(
+              check<StageComplete> {
+                assertThat(it.stage.execution.type).isEqualTo(pipeline.type)
+                assertThat(it.stage.execution.id).isEqualTo(pipeline.id)
+                assertThat(it.stage.id).isEqualTo(message.stageId)
+                assertThat(it.stage.status).isEqualTo(taskStatus)
+              }
+            )
           }
         }
 
@@ -311,19 +295,23 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("updates the stage state") {
-            verify(repository).storeStage(check {
-              assertThat(it.status).isEqualTo(taskStatus)
-              assertThat(it.endTime).isEqualTo(clock.millis())
-            })
+            verify(repository).storeStage(
+              check {
+                assertThat(it.status).isEqualTo(taskStatus)
+                assertThat(it.endTime).isEqualTo(clock.millis())
+              }
+            )
           }
 
           it("runs the next stage") {
-            verify(queue).push(StartStage(
-              message.executionType,
-              message.executionId,
-              message.application,
-              pipeline.stages.last().id
-            ))
+            verify(queue).push(
+              StartStage(
+                message.executionType,
+                message.executionId,
+                message.application,
+                pipeline.stages.last().id
+              )
+            )
           }
 
           it("does not run any tasks") {
@@ -554,10 +542,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
       }
 
       it("just marks the stage as SKIPPED") {
-        verify(repository).storeStage(check {
-          assertThat(it.id).isEqualTo(message.stageId)
-          assertThat(it.status).isEqualTo(SKIPPED)
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.id).isEqualTo(message.stageId)
+            assertThat(it.status).isEqualTo(SKIPPED)
+          }
+        )
       }
 
       it("starts anything downstream") {
@@ -596,10 +586,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
         }
 
         it("updates the stage state") {
-          verify(repository).storeStage(check {
-            assertThat(it.status).isEqualTo(taskStatus)
-            assertThat(it.endTime).isEqualTo(clock.millis())
-          })
+          verify(repository).storeStage(
+            check {
+              assertThat(it.status).isEqualTo(taskStatus)
+              assertThat(it.endTime).isEqualTo(clock.millis())
+            }
+          )
         }
 
         it("does not run any downstream stages") {
@@ -607,11 +599,13 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
         }
 
         it("fails the execution") {
-          verify(queue).push(CompleteExecution(
-            message.executionType,
-            message.executionId,
-            message.application
-          ))
+          verify(queue).push(
+            CompleteExecution(
+              message.executionType,
+              message.executionId,
+              message.application
+            )
+          )
         }
 
         it("runs the stage's cancellation routine") {
@@ -619,12 +613,14 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
         }
 
         it("publishes an event") {
-          verify(publisher).publishEvent(check<StageComplete> {
-            assertThat(it.executionType).isEqualTo(pipeline.type)
-            assertThat(it.executionId).isEqualTo(pipeline.id)
-            assertThat(it.stageId).isEqualTo(message.stageId)
-            assertThat(it.status).isEqualTo(taskStatus)
-          })
+          verify(publisher).publishEvent(
+            check<StageComplete> {
+              assertThat(it.stage.execution.type).isEqualTo(pipeline.type)
+              assertThat(it.stage.execution.id).isEqualTo(pipeline.id)
+              assertThat(it.stage.id).isEqualTo(message.stageId)
+              assertThat(it.stage.status).isEqualTo(taskStatus)
+            }
+          )
         }
       }
     }
@@ -659,10 +655,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
       }
 
       it("updates the stage state") {
-        verify(repository).storeStage(check {
-          assertThat(it.status).isEqualTo(TERMINAL)
-          assertThat(it.endTime).isEqualTo(clock.millis())
-        })
+        verify(repository).storeStage(
+          check {
+            assertThat(it.status).isEqualTo(TERMINAL)
+            assertThat(it.endTime).isEqualTo(clock.millis())
+          }
+        )
       }
 
       it("does not run any downstream stages") {
@@ -670,11 +668,13 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
       }
 
       it("fails the execution") {
-        verify(queue).push(CompleteExecution(
-          message.executionType,
-          message.executionId,
-          message.application
-        ))
+        verify(queue).push(
+          CompleteExecution(
+            message.executionType,
+            message.executionId,
+            message.application
+          )
+        )
       }
 
       it("runs the stage's cancellation routine") {
@@ -682,12 +682,87 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<StageComplete> {
-          assertThat(it.executionType).isEqualTo(pipeline.type)
-          assertThat(it.executionId).isEqualTo(pipeline.id)
-          assertThat(it.stageId).isEqualTo(message.stageId)
-          assertThat(it.status).isEqualTo(TERMINAL)
-        })
+        verify(publisher).publishEvent(
+          check<StageComplete> {
+            assertThat(it.executionType).isEqualTo(pipeline.type)
+            assertThat(it.executionId).isEqualTo(pipeline.id)
+            assertThat(it.stageId).isEqualTo(message.stageId)
+            assertThat(it.status).isEqualTo(TERMINAL)
+          }
+        )
+      }
+    }
+
+    describe("when a stage had skipped synthetics or tasks") {
+      given("some tasks were skipped") {
+        val pipeline = pipeline {
+          stage {
+            refId = "1"
+            type = multiTaskStage.type
+            multiTaskStage.plan(this)
+            tasks[0].status = SUCCEEDED
+            tasks[1].status = SKIPPED
+            tasks[2].status = SUCCEEDED
+            status = RUNNING
+          }
+        }
+        val message = CompleteStage(pipeline.stageByRef("1"))
+
+        beforeGroup {
+          whenever(repository.retrieve(PIPELINE, message.executionId)) doReturn pipeline
+        }
+
+        afterGroup(::resetMocks)
+
+        on("receiving the message") {
+          subject.handle(message)
+        }
+
+        it("updates the stage state") {
+          verify(repository).storeStage(
+            check {
+              assertThat(it.status).isEqualTo(SUCCEEDED)
+              assertThat(it.endTime).isEqualTo(clock.millis())
+            }
+          )
+        }
+      }
+
+      given("some synthetic stages were skipped") {
+        val pipeline = pipeline {
+          stage {
+            refId = "1"
+            type = stageWithSyntheticBefore.type
+            stageWithSyntheticBefore.buildBeforeStages(this)
+            stageWithSyntheticBefore.buildTasks(this, NoOpTaskImplementationResolver())
+          }
+        }
+
+        val message = CompleteStage(pipeline.stageByRef("1"))
+
+        beforeGroup {
+          pipeline
+            .stages
+            .filter { it.syntheticStageOwner == STAGE_BEFORE }
+            .forEach { it.status = SKIPPED }
+          pipeline.stageById(message.stageId).tasks.forEach { it.status = SUCCEEDED }
+          whenever(repository.retrieve(PIPELINE, message.executionId)) doReturn pipeline
+        }
+
+        afterGroup(::resetMocks)
+
+        on("receiving the message") {
+          subject.handle(message)
+        }
+
+        it("updates the stage state") {
+          verify(repository).storeStage(
+            check {
+              assertThat(it.status).isEqualTo(SUCCEEDED)
+              assertThat(it.endTime).isEqualTo(clock.millis())
+            }
+          )
+        }
       }
     }
 
@@ -771,10 +846,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("updates the stage state") {
-            verify(repository).storeStage(check {
-              assertThat(it.status).isEqualTo(failureStatus)
-              assertThat(it.endTime).isEqualTo(clock.millis())
-            })
+            verify(repository).storeStage(
+              check {
+                assertThat(it.status).isEqualTo(failureStatus)
+                assertThat(it.endTime).isEqualTo(clock.millis())
+              }
+            )
           }
         }
       }
@@ -811,10 +888,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
         }
 
         it("updates the stage state") {
-          verify(repository).storeStage(check {
-            assertThat(it.status).isEqualTo(FAILED_CONTINUE)
-            assertThat(it.endTime).isEqualTo(clock.millis())
-          })
+          verify(repository).storeStage(
+            check {
+              assertThat(it.status).isEqualTo(FAILED_CONTINUE)
+              assertThat(it.endTime).isEqualTo(clock.millis())
+            }
+          )
         }
 
         it("does not do anything silly like running the after stage again") {
@@ -920,7 +999,7 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
             refId = "1"
             type = stageWithSyntheticBefore.type
             stageWithSyntheticBefore.buildBeforeStages(this)
-            stageWithSyntheticBefore.buildTasks(this)
+            stageWithSyntheticBefore.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
@@ -944,9 +1023,11 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("runs the next synthetic stage") {
-            verify(queue).push(StartStage(
-              pipeline.stageByRef("1<2")
-            ))
+            verify(queue).push(
+              StartStage(
+                pipeline.stageByRef("1<2")
+              )
+            )
           }
         }
 
@@ -970,10 +1051,13 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("signals the parent stage to run") {
-            verify(queue).ensure(ContinueParentStage(
-              pipeline.stageByRef("1"),
-              STAGE_BEFORE
-            ), ZERO)
+            verify(queue).ensure(
+              ContinueParentStage(
+                pipeline.stageByRef("1"),
+                STAGE_BEFORE
+              ),
+              ZERO
+            )
           }
         }
       }
@@ -984,7 +1068,7 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
             refId = "1"
             type = stageWithSyntheticAfter.type
             stageWithSyntheticAfter.buildBeforeStages(this)
-            stageWithSyntheticAfter.buildTasks(this)
+            stageWithSyntheticAfter.buildTasks(this, NoOpTaskImplementationResolver())
             stageWithSyntheticAfter.buildAfterStages(this)
           }
         }
@@ -1009,12 +1093,14 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           }
 
           it("runs the next synthetic stage") {
-            verify(queue).push(StartStage(
-              message.executionType,
-              message.executionId,
-              message.application,
-              pipeline.stages.last().id
-            ))
+            verify(queue).push(
+              StartStage(
+                message.executionType,
+                message.executionId,
+                message.application,
+                pipeline.stages.last().id
+              )
+            )
           }
         }
 
@@ -1039,10 +1125,13 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
 
           it("tells the parent stage to continue") {
             verify(queue)
-              .ensure(ContinueParentStage(
-                pipeline.stageById(message.stageId).parent!!,
-                STAGE_AFTER
-              ), ZERO)
+              .ensure(
+                ContinueParentStage(
+                  pipeline.stageById(message.stageId).parent!!,
+                  STAGE_AFTER
+                ),
+                ZERO
+              )
           }
         }
       }
@@ -1200,12 +1289,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
             name = "parallel"
             type = stageWithParallelBranches.type
             stageWithParallelBranches.buildBeforeStages(this)
-            stageWithParallelBranches.buildTasks(this)
+            stageWithParallelBranches.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
         val message = pipeline.stageByRef("1<1").let { completedSynthetic ->
-          singleTaskStage.buildTasks(completedSynthetic)
+          singleTaskStage.buildTasks(completedSynthetic, NoOpTaskImplementationResolver())
           completedSynthetic.tasks.forEach { it.status = SUCCEEDED }
           CompleteStage(completedSynthetic)
         }
@@ -1234,12 +1323,12 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
             name = "parallel"
             type = stageWithParallelBranches.type
             stageWithParallelBranches.buildBeforeStages(this)
-            stageWithParallelBranches.buildTasks(this)
+            stageWithParallelBranches.buildTasks(this, NoOpTaskImplementationResolver())
           }
         }
 
         pipeline.stages.filter { it.parentStageId != null }.forEach {
-          singleTaskStage.buildTasks(it)
+          singleTaskStage.buildTasks(it, NoOpTaskImplementationResolver())
           it.tasks.forEach { it.status = SUCCEEDED }
         }
         val message = CompleteStage(pipeline.stageByRef("1<1"))
@@ -1267,7 +1356,7 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
   }
 
   describe("surfacing expression evaluation errors") {
-    fun exceptionErrors(stages: List<Stage>): List<*> =
+    fun exceptionErrors(stages: List<StageExecution>): List<*> =
       stages.flatMap {
         ((it.context["exception"] as Map<*, *>)["details"] as Map<*, *>)["errors"] as List<*>
       }
@@ -1526,24 +1615,6 @@ object CompleteStageHandlerTest : SubjectSpek<CompleteStageHandler>({
           assertThat(pipeline.stageById(message.stageId).status).isEqualTo(TERMINAL)
         }
       }
-    }
-  }
-
-  given("api stage completed successfully") {
-    val pipeline = pipeline {
-      stage {
-        refId = "1"
-        type = successfulApiStage.name
-      }
-    }
-
-    val message = CompleteStage(pipeline.stageByRef("1"))
-    pipeline.stageById(message.stageId).apply {
-      status = SUCCEEDED
-    }
-
-    it("stage was successfully ran") {
-      assertThat(pipeline.stageById(message.stageId).status).isEqualTo(SUCCEEDED)
     }
   }
 })

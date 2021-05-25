@@ -16,14 +16,24 @@
 
 package com.netflix.spinnaker.orca.echo.pipeline
 
+import com.fasterxml.jackson.annotation.JsonAnyGetter
+import com.fasterxml.jackson.annotation.JsonAnySetter
+import com.fasterxml.jackson.annotation.JsonIgnore
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.OverridableTimeoutRetryableTask
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.api.pipeline.TaskResult
+import com.netflix.spinnaker.orca.echo.util.ManualJudgmentAuthorization
+import com.netflix.spinnaker.orca.pipeline.model.PipelineExecutionImpl
+
+import javax.annotation.Nonnull
 import java.util.concurrent.TimeUnit
 import com.google.common.annotations.VisibleForTesting
 import com.netflix.spinnaker.orca.*
 import com.netflix.spinnaker.orca.echo.EchoService
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import com.netflix.spinnaker.security.User
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
 import groovy.util.logging.Slf4j
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.stereotype.Component
@@ -32,29 +42,28 @@ import org.springframework.stereotype.Component
 class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage {
 
   @Override
-  void taskGraph(Stage stage, TaskNode.Builder builder) {
+  void taskGraph(@Nonnull StageExecution stage, @Nonnull TaskNode.Builder builder) {
     builder
-      .withTask("waitForJudgment", WaitForManualJudgmentTask.class)
+        .withTask("waitForJudgment", WaitForManualJudgmentTask.class)
   }
 
   @Override
-  void prepareStageForRestart(Stage stage) {
+  void prepareStageForRestart(@Nonnull StageExecution stage) {
     stage.context.remove("judgmentStatus")
     stage.context.remove("lastModifiedBy")
   }
 
   @Override
-  Optional<User> authenticatedUser(Stage stage) {
+  Optional<PipelineExecution.AuthenticationDetails> authenticatedUser(StageExecution stage) {
     def stageData = stage.mapTo(StageData)
     if (stageData.state != StageData.State.CONTINUE || !stage.lastModified?.user || !stageData.propagateAuthenticationContext) {
       return Optional.empty()
     }
 
-    def user = new User()
-    user.setAllowedAccounts(stage.lastModified.allowedAccounts)
-    user.setUsername(stage.lastModified.user)
-    user.setEmail(stage.lastModified.user)
-    return Optional.of(user.asImmutable())
+    return Optional.of(
+        new PipelineExecution.AuthenticationDetails(
+            stage.lastModified.user,
+            stage.lastModified.allowedAccounts));
   }
 
   @Slf4j
@@ -64,11 +73,18 @@ class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage 
     final long backoffPeriod = 15000
     final long timeout = TimeUnit.DAYS.toMillis(3)
 
-    @Autowired(required = false)
-    EchoService echoService
+    private final EchoService echoService
+    private final ManualJudgmentAuthorization manualJudgmentAuthorization
+
+    @Autowired
+    WaitForManualJudgmentTask(Optional<EchoService> echoService,
+                              ManualJudgmentAuthorization manualJudgmentAuthorization) {
+      this.echoService = echoService.orElse(null)
+      this.manualJudgmentAuthorization = manualJudgmentAuthorization
+    }
 
     @Override
-    TaskResult execute(Stage stage) {
+    TaskResult execute(StageExecution stage) {
       StageData stageData = stage.mapTo(StageData)
       String notificationState
       ExecutionStatus executionStatus
@@ -88,12 +104,23 @@ class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage 
           break
       }
 
+      if (stageData.state != StageData.State.UNKNOWN && !stageData.getRequiredJudgmentRoles().isEmpty()) {
+        // only check authorization _if_ a judgment has been made and required judgment roles have been specified
+        def currentUser = stage.lastModified?.user
+
+        if (!manualJudgmentAuthorization.isAuthorized(stageData.getRequiredJudgmentRoles(), currentUser)) {
+          notificationState = "manualJudgment"
+          executionStatus = ExecutionStatus.RUNNING
+          stage.context.put("judgmentStatus", "")
+        }
+      }
+
       Map outputs = processNotifications(stage, stageData, notificationState)
 
       return TaskResult.builder(executionStatus).context(outputs).build()
     }
 
-    Map processNotifications(Stage stage, StageData stageData, String notificationState) {
+    Map processNotifications(StageExecution stage, StageData stageData, String notificationState) {
       if (echoService) {
         // sendNotifications will be true if using the new scheme for configuration notifications.
         // The new scheme matches the scheme used by the other stages.
@@ -120,7 +147,14 @@ class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage 
   static class StageData {
     String judgmentStatus = ""
     List<Notification> notifications = []
+    Set<String> selectedStageRoles = []
+    Set<String> requiredJudgmentRoles = []
     boolean propagateAuthenticationContext
+
+    Set<String> getRequiredJudgmentRoles() {
+      // UI is currently configuring 'selectedStageRoles' so this will fallback to that if not otherwise specified
+      return requiredJudgmentRoles ?: selectedStageRoles ?: []
+    }
 
     State getState() {
       switch (judgmentStatus?.toLowerCase()) {
@@ -151,6 +185,19 @@ class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage 
     Map<String, Date> lastNotifiedByNotificationState = [:]
     Long notifyEveryMs = -1
 
+    @JsonIgnore
+    Map<String, Object> other = new HashMap<>()
+
+    @JsonAnyGetter
+    Map<String, Object> other() {
+      return other
+    }
+
+    @JsonAnySetter
+    void setOther(String name, Object value) {
+      other.put(name, value)
+    }
+
     boolean shouldNotify(String notificationState, Date now = new Date()) {
       // The new scheme for configuring notifications requires the use of the when list (just like the other stages).
       // If this list is present, but does not contain an entry for this particular notification state, do not notify.
@@ -171,29 +218,29 @@ class ManualJudgmentStage implements StageDefinitionBuilder, AuthenticatedStage 
       return new Date(lastNotified.time + notifyEveryMs) <= now
     }
 
-    void notify(EchoService echoService, Stage stage, String notificationState) {
+    void notify(EchoService echoService, StageExecution stage, String notificationState) {
       echoService.create(new EchoService.Notification(
-        notificationType: EchoService.Notification.Type.valueOf(type.toUpperCase()),
-        to: address ? [address] : (publisherName ? [publisherName] : null),
-        cc: cc ? [cc] : null,
-        templateGroup: notificationState,
-        severity: EchoService.Notification.Severity.HIGH,
-        source: new EchoService.Notification.Source(
-          executionType: stage.execution.type.toString(),
-          executionId: stage.execution.id,
-          application: stage.execution.application
-        ),
-        additionalContext: [
-          stageName: stage.name,
-          stageId: stage.refId,
-          restrictExecutionDuringTimeWindow: stage.context.restrictExecutionDuringTimeWindow,
-          execution: stage.execution,
-          instructions: stage.context.instructions ?: "",
-          message: message?.get(notificationState)?.text,
-          judgmentInputs: stage.context.judgmentInputs,
-          judgmentInput: stage.context.judgmentInput,
-          judgedBy: stage.context.lastModifiedBy
-        ]
+          notificationType: EchoService.Notification.Type.valueOf(type.toUpperCase()),
+          to: address ? [address] : (publisherName ? [publisherName] : null),
+          cc: cc ? [cc] : null,
+          templateGroup: notificationState,
+          severity: EchoService.Notification.Severity.HIGH,
+          source: new EchoService.Notification.Source(
+              executionType: stage.execution.type.toString(),
+              executionId: stage.execution.id,
+              application: stage.execution.application
+          ),
+          additionalContext: [
+              stageName                        : stage.name,
+              stageId                          : stage.refId,
+              restrictExecutionDuringTimeWindow: stage.context.restrictExecutionDuringTimeWindow,
+              execution                        : stage.execution,
+              instructions                     : stage.context.instructions ?: "",
+              message                          : message?.get(notificationState)?.text,
+              judgmentInputs                   : stage.context.judgmentInputs,
+              judgmentInput                    : stage.context.judgmentInput,
+              judgedBy                         : stage.context.lastModifiedBy
+          ]
       ))
       lastNotifiedByNotificationState[notificationState] = new Date()
     }

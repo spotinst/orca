@@ -17,9 +17,13 @@
 package com.netflix.spinnaker.orca.webhook.config;
 
 import com.netflix.spinnaker.fiat.model.resources.Role;
-import com.netflix.spinnaker.orca.config.PreconfiguredStageParameter;
+import com.netflix.spinnaker.orca.api.preconfigured.jobs.PreconfiguredStageParameter;
 import java.lang.reflect.Field;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import lombok.Data;
 import lombok.NoArgsConstructor;
@@ -31,8 +35,8 @@ import org.springframework.http.HttpMethod;
 @Data
 @Slf4j
 public class WebhookProperties {
-  private static List<String> IGNORE_FIELDS =
-      Arrays.asList(
+  private static final Set<String> IGNORE_FIELDS =
+      Set.of(
           "props",
           "enabled",
           "label",
@@ -42,7 +46,7 @@ public class WebhookProperties {
           "parameterValues",
           "permissions",
           "parameterData");
-  private static List<Field> ALL_FIELDS =
+  private static final List<Field> ALL_FIELDS =
       Arrays.stream(PreconfiguredWebhook.class.getDeclaredFields())
           .filter(f -> !f.isSynthetic())
           .filter(f -> !IGNORE_FIELDS.contains(f.getName()))
@@ -52,6 +56,8 @@ public class WebhookProperties {
   private TrustSettings trust;
 
   private boolean verifyRedirects = true;
+
+  private List<Integer> defaultRetryStatusCodes = List.of(429);
 
   @Data
   @NoArgsConstructor

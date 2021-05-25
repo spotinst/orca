@@ -19,23 +19,23 @@ package com.netflix.spinnaker.orca.kayenta.pipeline
 import com.fasterxml.jackson.annotation.JsonCreator
 import com.fasterxml.jackson.databind.SerializationFeature.WRITE_DATES_AS_TIMESTAMPS
 import com.fasterxml.jackson.module.kotlin.convertValue
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageGraphBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.ext.mapTo
 import com.netflix.spinnaker.orca.jackson.OrcaObjectMapper
 import com.netflix.spinnaker.orca.kayenta.CanaryScope
 import com.netflix.spinnaker.orca.kayenta.CanaryScopes
-import com.netflix.spinnaker.orca.kayenta.model.KayentaCanaryContext
-import com.netflix.spinnaker.orca.kayenta.model.RunCanaryContext
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.TaskNode
+import com.netflix.spinnaker.orca.kayenta.KayentaCanaryContext
+import com.netflix.spinnaker.orca.kayenta.RunCanaryContext
 import com.netflix.spinnaker.orca.pipeline.WaitStage
-import com.netflix.spinnaker.orca.pipeline.graph.StageGraphBuilder
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import org.springframework.stereotype.Component
 import java.time.Clock
 import java.time.Duration
 import java.time.Instant
 import java.time.temporal.ChronoUnit
 import java.util.HashMap
+import org.springframework.stereotype.Component
 
 @Component
 class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder {
@@ -44,10 +44,10 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
     .newInstance()
     .disable(WRITE_DATES_AS_TIMESTAMPS) // we want Instant serialized as ISO string
 
-  override fun taskGraph(stage: Stage, builder: TaskNode.Builder) {
+  override fun taskGraph(stage: StageExecution, builder: TaskNode.Builder) {
   }
 
-  private fun getDeployDetails(stage: Stage): DeployedServerGroupContext? {
+  private fun getDeployDetails(stage: StageExecution): DeployedServerGroupContext? {
     val deployedServerGroupsStage = stage.parent?.execution?.stages?.find {
       it.type == DeployCanaryServerGroupsStage.STAGE_TYPE && it.parentStageId == stage.parentStageId
     }
@@ -59,12 +59,14 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
     return DeployedServerGroupContext.from(data)
   }
 
-  override fun beforeStages(parent: Stage, graph: StageGraphBuilder) {
+  override fun beforeStages(parent: StageExecution, graph: StageGraphBuilder) {
     val canaryConfig = parent.mapTo<KayentaCanaryContext>("/canaryConfig")
 
     val lifetime: Duration = if (canaryConfig.endTime != null) {
-      Duration.ofMinutes((canaryConfig.startTime ?: Instant.now(clock))
-        .until(canaryConfig.endTime, ChronoUnit.MINUTES))
+      Duration.ofMinutes(
+        (canaryConfig.startTime ?: Instant.now(clock))
+          .until(canaryConfig.endTime, ChronoUnit.MINUTES)
+      )
     } else if (canaryConfig.lifetime != null) {
       canaryConfig.lifetime
     } else {
@@ -124,25 +126,24 @@ class RunCanaryIntervalsStage(private val clock: Clock) : StageDefinitionBuilder
     intervalDuration: Duration
   ): Map<String, CanaryScopes> {
     val requestScopes = HashMap<String, CanaryScopes>()
+    var start: Instant
+    val end: Instant
+
+    val warmup = config.beginCanaryAnalysisAfter
+    val offset = intervalDuration.multipliedBy(interval.toLong())
+
+    if (config.endTime == null) {
+      start = (config.startTime ?: Instant.now(clock)).plus(warmup)
+      end = (config.startTime ?: Instant.now(clock)).plus(warmup + offset)
+    } else {
+      start = (config.startTime ?: Instant.now(clock))
+      end = (config.startTime ?: Instant.now(clock)).plus(offset)
+    }
+
+    if (config.lookback > Duration.ZERO) {
+      start = end.minus(config.lookback)
+    }
     config.scopes.forEach { scope ->
-      var start: Instant
-      val end: Instant
-
-      val warmup = config.beginCanaryAnalysisAfter
-      val offset = intervalDuration.multipliedBy(interval.toLong())
-
-      if (config.endTime == null) {
-        start = (config.startTime ?: Instant.now(clock)).plus(warmup)
-        end = (config.startTime ?: Instant.now(clock)).plus(warmup + offset)
-      } else {
-        start = (config.startTime ?: Instant.now(clock))
-        end = (config.startTime ?: Instant.now(clock)).plus(offset)
-      }
-
-      if (config.lookback > Duration.ZERO) {
-        start = end.minus(config.lookback)
-      }
-
       val controlExtendedScopeParams = mutableMapOf<String, String?>()
       controlExtendedScopeParams.putAll(scope.extendedScopeParams)
       var controlLocation = scope.controlLocation
@@ -227,12 +228,12 @@ data class DeployedServerGroupContext @JsonCreator constructor(
   companion object {
     fun from(data: Map<String, String>): DeployedServerGroupContext {
       return DeployedServerGroupContext(
-              data["controlLocation"].orEmpty(),
-              data["controlScope"].orEmpty(),
-              data["controlAccountId"],
-              data["experimentLocation"].orEmpty(),
-              data["experimentScope"].orEmpty(),
-              data["experimentAccountId"]
+        data["controlLocation"].orEmpty(),
+        data["controlScope"].orEmpty(),
+        data["controlAccountId"],
+        data["experimentLocation"].orEmpty(),
+        data["experimentScope"].orEmpty(),
+        data["experimentAccountId"]
       )
     }
   }

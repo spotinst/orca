@@ -16,15 +16,16 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.Task
 import com.netflix.spinnaker.orca.TaskResolver
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.fixture.task
+import com.netflix.spinnaker.orca.api.pipeline.Task
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
+import com.netflix.spinnaker.orca.api.test.task
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.RescheduleExecution
 import com.netflix.spinnaker.orca.q.RunTask
+import com.netflix.spinnaker.orca.q.TasksProvider
 import com.netflix.spinnaker.q.Queue
 import com.nhaarman.mockito_kotlin.doReturn
 import com.nhaarman.mockito_kotlin.mock
@@ -41,7 +42,7 @@ object RescheduleExecutionHandlerTest : SubjectSpek<RescheduleExecutionHandler>(
 
   val queue: Queue = mock()
   val repository: ExecutionRepository = mock()
-  val taskResolver = TaskResolver(emptyList())
+  val taskResolver = TaskResolver(TasksProvider(emptyList()))
 
   subject(CachingMode.GROUP) {
     RescheduleExecutionHandler(queue, repository, taskResolver)

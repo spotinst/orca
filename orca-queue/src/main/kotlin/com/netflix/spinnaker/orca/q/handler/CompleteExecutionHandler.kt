@@ -17,31 +17,31 @@
 package com.netflix.spinnaker.orca.q.handler
 
 import com.netflix.spectator.api.Registry
-import com.netflix.spinnaker.orca.ExecutionStatus
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.FAILED_CONTINUE
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.SKIPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.STOPPED
-import com.netflix.spinnaker.orca.ExecutionStatus.SUCCEEDED
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.FAILED_CONTINUE
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SKIPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.STOPPED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.SUCCEEDED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.PipelineExecution
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.events.ExecutionComplete
 import com.netflix.spinnaker.orca.ext.allUpstreamStagesComplete
-import com.netflix.spinnaker.orca.pipeline.model.Execution
-import com.netflix.spinnaker.orca.pipeline.model.Stage
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CancelStage
 import com.netflix.spinnaker.orca.q.CompleteExecution
 import com.netflix.spinnaker.orca.q.StartWaitingExecutions
 import com.netflix.spinnaker.q.AttemptsAttribute
 import com.netflix.spinnaker.q.Queue
+import java.time.Duration
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Qualifier
 import org.springframework.beans.factory.annotation.Value
 import org.springframework.context.ApplicationEventPublisher
 import org.springframework.stereotype.Component
-import java.time.Duration
 
 @Component
 class CompleteExecutionHandler(
@@ -62,18 +62,23 @@ class CompleteExecutionHandler(
         log.info("Execution ${execution.id} already completed with ${execution.status} status")
       } else {
         message.determineFinalStatus(execution) { status ->
-          repository.updateStatus(execution.type, message.executionId, status)
-          publisher.publishEvent(
-            ExecutionComplete(this, message.executionType, message.executionId, status)
-          )
-          registry.counter(completedId.withTags(
-            "status", status.name,
-            "executionType", execution.type.name,
-            "application", execution.application,
-            "origin", execution.origin ?: "unknown"
-          )).increment()
+          execution.updateStatus(status)
+          repository.updateStatus(execution)
+          publisher.publishEvent(ExecutionComplete(this, execution))
+
+          registry.counter(
+            completedId.withTags(
+              "status", status.name,
+              "executionType", execution.type.name,
+              "application", execution.application,
+              "origin", execution.origin ?: "unknown"
+            )
+          ).increment()
           if (status != SUCCEEDED) {
-            execution.topLevelStages.filter { it.status == RUNNING }.forEach {
+            execution
+              .topLevelStages
+              .filter { it.status == RUNNING }
+              .forEach {
               queue.push(CancelStage(it))
             }
           }
@@ -86,7 +91,7 @@ class CompleteExecutionHandler(
   }
 
   private fun CompleteExecution.determineFinalStatus(
-    execution: Execution,
+    execution: PipelineExecution,
     block: (ExecutionStatus) -> Unit
   ) {
     execution.topLevelStages.let { stages ->
@@ -106,15 +111,15 @@ class CompleteExecutionHandler(
     }
   }
 
-  private val Execution.topLevelStages
-    get(): List<Stage> = stages.filter { it.parentStageId == null }
+  private val PipelineExecution.topLevelStages
+    get(): List<StageExecution> = stages.filter { it.parentStageId == null }
 
-  private fun Execution.shouldOverrideSuccess(): Boolean =
+  private fun PipelineExecution.shouldOverrideSuccess(): Boolean =
     stages
       .filter { it.status == STOPPED }
       .any { it.context["completeOtherBranchesThenFail"] == true }
 
-  private fun List<Stage>.otherBranchesIncomplete() =
+  private fun List<StageExecution>.otherBranchesIncomplete() =
     any { it.status == RUNNING } ||
       any { it.status == NOT_STARTED && it.allUpstreamStagesComplete() }
 

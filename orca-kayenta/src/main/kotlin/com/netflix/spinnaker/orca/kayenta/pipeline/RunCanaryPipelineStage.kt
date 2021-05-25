@@ -16,21 +16,21 @@
 
 package com.netflix.spinnaker.orca.kayenta.pipeline
 
-import com.netflix.spinnaker.orca.CancellableStage
+import com.netflix.spinnaker.orca.api.pipeline.CancellableStage
+import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
+import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
+import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
 import com.netflix.spinnaker.orca.ext.mapTo
 import com.netflix.spinnaker.orca.ext.withTask
 import com.netflix.spinnaker.orca.kayenta.KayentaService
-import com.netflix.spinnaker.orca.kayenta.model.RunCanaryContext
+import com.netflix.spinnaker.orca.kayenta.RunCanaryContext
 import com.netflix.spinnaker.orca.kayenta.tasks.MonitorKayentaCanaryTask
-import com.netflix.spinnaker.orca.kayenta.tasks.RunKayentaCanaryTask
 import com.netflix.spinnaker.orca.kayenta.tasks.ResolveKayentaConfigIdTask
-import com.netflix.spinnaker.orca.pipeline.StageDefinitionBuilder
-import com.netflix.spinnaker.orca.pipeline.TaskNode
-import com.netflix.spinnaker.orca.pipeline.model.Stage
-import org.slf4j.LoggerFactory
-import org.springframework.stereotype.Component
+import com.netflix.spinnaker.orca.kayenta.tasks.RunKayentaCanaryTask
 import java.lang.String.format
 import java.util.Collections.emptyMap
+import org.slf4j.LoggerFactory
+import org.springframework.stereotype.Component
 
 @Component
 class RunCanaryPipelineStage(
@@ -39,14 +39,14 @@ class RunCanaryPipelineStage(
 
   private val log = LoggerFactory.getLogger(javaClass)
 
-  override fun taskGraph(stage: Stage, builder: TaskNode.Builder) {
-      val context = stage.mapTo<RunCanaryContext>()
-      if (context.canaryConfigId.isNullOrEmpty()) {
-        if (context.canaryConfigName.isNullOrEmpty()) {
-          throw IllegalArgumentException("Canary config must be specified as either UUID or name string")
-        }
-        builder.withTask<ResolveKayentaConfigIdTask>("resolveKayentaConfigId")
+  override fun taskGraph(stage: StageExecution, builder: TaskNode.Builder) {
+    val context = stage.mapTo<RunCanaryContext>()
+    if (context.canaryConfigId.isNullOrEmpty()) {
+      if (context.canaryConfigName.isNullOrEmpty()) {
+        throw IllegalArgumentException("Canary config must be specified as either UUID or name string")
       }
+      builder.withTask<ResolveKayentaConfigIdTask>("resolveKayentaConfigId")
+    }
     builder
       .withTask<RunKayentaCanaryTask>("runCanary")
       .withTask<MonitorKayentaCanaryTask>("monitorCanary")
@@ -56,7 +56,7 @@ class RunCanaryPipelineStage(
     return STAGE_TYPE
   }
 
-  override fun cancel(stage: Stage): CancellableStage.Result {
+  override fun cancel(stage: StageExecution): CancellableStage.Result {
     val context = stage.context
     val canaryPipelineExecutionId = context["canaryPipelineExecutionId"] as String?
 
@@ -72,7 +72,7 @@ class RunCanaryPipelineStage(
       log.info(format("Not cancelling stage (stageId: %s: executionId: %s, context: %s) since no canary pipeline execution id exists", stage.id, stage.execution.id, stage.context))
     }
 
-    return CancellableStage.Result(stage, emptyMap<Any, Any>())
+    return CancellableStage.Result(stage, emptyMap<String, Any>())
   }
 
   companion object {

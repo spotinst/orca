@@ -16,15 +16,15 @@
 
 package com.netflix.spinnaker.orca.q.handler
 
-import com.netflix.spinnaker.orca.ExecutionStatus.CANCELED
-import com.netflix.spinnaker.orca.ExecutionStatus.NOT_STARTED
-import com.netflix.spinnaker.orca.ExecutionStatus.RUNNING
-import com.netflix.spinnaker.orca.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.CANCELED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.NOT_STARTED
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.RUNNING
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionStatus.TERMINAL
+import com.netflix.spinnaker.orca.api.pipeline.models.ExecutionType.PIPELINE
+import com.netflix.spinnaker.orca.api.test.pipeline
+import com.netflix.spinnaker.orca.api.test.stage
 import com.netflix.spinnaker.orca.events.ExecutionComplete
 import com.netflix.spinnaker.orca.events.ExecutionStarted
-import com.netflix.spinnaker.orca.fixture.pipeline
-import com.netflix.spinnaker.orca.fixture.stage
-import com.netflix.spinnaker.orca.pipeline.model.Execution.ExecutionType.PIPELINE
 import com.netflix.spinnaker.orca.pipeline.persistence.ExecutionRepository
 import com.netflix.spinnaker.orca.q.CancelExecution
 import com.netflix.spinnaker.orca.q.StartExecution
@@ -48,6 +48,7 @@ import com.nhaarman.mockito_kotlin.times
 import com.nhaarman.mockito_kotlin.verify
 import com.nhaarman.mockito_kotlin.verifyNoMoreInteractions
 import com.nhaarman.mockito_kotlin.whenever
+import java.util.UUID
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.dsl.describe
 import org.jetbrains.spek.api.dsl.given
@@ -57,7 +58,6 @@ import org.jetbrains.spek.api.lifecycle.CachingMode.GROUP
 import org.jetbrains.spek.subject.SubjectSpek
 import org.springframework.context.ApplicationEventPublisher
 import rx.Observable.just
-import java.util.UUID
 
 object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
 
@@ -93,7 +93,8 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("marks the execution as running") {
-        verify(repository).updateStatus(PIPELINE, message.executionId, RUNNING)
+        assertThat(pipeline.status).isEqualTo(RUNNING)
+        verify(repository).updateStatus(pipeline)
       }
 
       it("starts the first stage") {
@@ -101,10 +102,13 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<ExecutionStarted> {
-          assertThat(it.executionType).isEqualTo(message.executionType)
-          assertThat(it.executionId).isEqualTo(message.executionId)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionStarted> {
+            assertThat(it.executionType).isEqualTo(message.executionType)
+            assertThat(it.executionId).isEqualTo(message.executionId)
+            assertThat(it.execution.startTime).isNotNull()
+          }
+        )
       }
     }
 
@@ -129,11 +133,13 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<ExecutionComplete> {
-          assertThat(it.executionType).isEqualTo(message.executionType)
-          assertThat(it.executionId).isEqualTo(message.executionId)
-          assertThat(it.status).isEqualTo(CANCELED)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionComplete> {
+            assertThat(it.executionType).isEqualTo(message.executionType)
+            assertThat(it.executionId).isEqualTo(message.executionId)
+            assertThat(it.status).isEqualTo(CANCELED)
+          }
+        )
       }
 
       it("pushes no messages to the queue") {
@@ -162,11 +168,13 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("publishes an event") {
-        verify(publisher).publishEvent(check<ExecutionComplete> {
-          assertThat(it.executionType).isEqualTo(message.executionType)
-          assertThat(it.executionId).isEqualTo(message.executionId)
-          assertThat(it.status).isEqualTo(NOT_STARTED)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionComplete> {
+            assertThat(it.executionType).isEqualTo(message.executionType)
+            assertThat(it.executionId).isEqualTo(message.executionId)
+            assertThat(it.status).isEqualTo(NOT_STARTED)
+          }
+        )
       }
 
       it("pushes no messages to the queue") {
@@ -256,15 +264,18 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("marks the execution as TERMINAL") {
-        verify(repository, times(1)).updateStatus(PIPELINE, pipeline.id, TERMINAL)
+        assertThat(pipeline.status).isEqualTo(TERMINAL)
+        verify(repository, times(1)).updateStatus(pipeline)
       }
 
       it("publishes an event with TERMINAL status") {
-        verify(publisher).publishEvent(check<ExecutionComplete> {
-          assertThat(it.executionType).isEqualTo(message.executionType)
-          assertThat(it.executionId).isEqualTo(message.executionId)
-          assertThat(it.status).isEqualTo(TERMINAL)
-        })
+        verify(publisher).publishEvent(
+          check<ExecutionComplete> {
+            assertThat(it.executionType).isEqualTo(message.executionType)
+            assertThat(it.executionId).isEqualTo(message.executionId)
+            assertThat(it.status).isEqualTo(TERMINAL)
+          }
+        )
       }
     }
 
@@ -288,11 +299,13 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
       }
 
       it("cancels the execution") {
-        verify(queue).push(CancelExecution(
-          pipeline,
-          "spinnaker",
-          "Could not begin execution before start time expiry"
-        ))
+        verify(queue).push(
+          CancelExecution(
+            pipeline,
+            "spinnaker",
+            "Could not begin execution before start time expiry"
+          )
+        )
       }
     }
 
@@ -337,7 +350,8 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
         }
 
         it("does not start the new pipeline") {
-          verify(repository, never()).updateStatus(PIPELINE, message.executionId, RUNNING)
+          assertThat(pipeline.status).isNotEqualTo(RUNNING)
+          verify(repository, never()).updateStatus(pipeline)
           verify(queue, never()).push(isA<StartStage>())
         }
 
@@ -371,7 +385,8 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
         }
 
         it("starts the new pipeline") {
-          verify(repository).updateStatus(PIPELINE, message.executionId, RUNNING)
+          assertThat(pipeline.status).isEqualTo(RUNNING)
+          verify(repository).updateStatus(pipeline)
           verify(queue).push(isA<StartStage>())
         }
       }
@@ -380,6 +395,7 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
         beforeGroup {
           pipeline.isLimitConcurrent = true
           runningPipeline.isLimitConcurrent = true
+          pipeline.status = NOT_STARTED
 
           whenever(
             repository.retrievePipelinesForPipelineConfigId(eq(configId), any())
@@ -397,7 +413,8 @@ object StartExecutionHandlerTest : SubjectSpek<StartExecutionHandler>({
         }
 
         it("starts the new pipeline") {
-          verify(repository).updateStatus(PIPELINE, message.executionId, RUNNING)
+          assertThat(pipeline.status).isEqualTo(RUNNING)
+          verify(repository).updateStatus(pipeline)
           verify(queue).push(isA<StartStage>())
         }
       }

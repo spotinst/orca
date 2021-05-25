@@ -14,18 +14,51 @@
  * limitations under the License.
  */
 
+plugins {
+  id("net.ltgt.errorprone") version "1.2.1"
+}
+
 apply from: "$rootDir/gradle/kotlin.gradle"
+apply from: "$rootDir/gradle/dokka.gradle"
 apply from: "$rootDir/gradle/spock.gradle"
+apply plugin: "java-library"
+
+sourceSets {
+  sample
+}
+
+dependencies {
+  errorprone("com.google.errorprone:error_prone_core:2.4.0")
+
+  implementation platform("io.spinnaker.kork:kork-bom:$korkVersion")
+  annotationProcessor platform("io.spinnaker.kork:kork-bom:$korkVersion")
+
+  api("io.spinnaker.kork:kork-plugins-api")
+
+  //TODO(jonsie): Remove this dependency
+  api("io.spinnaker.kork:kork-artifacts")
+
+  compileOnly("org.projectlombok:lombok")
+  annotationProcessor("org.projectlombok:lombok")
+
+  testRuntimeOnly("org.junit.jupiter:junit-jupiter-api")
+  testRuntimeOnly("org.junit.vintage:junit-vintage-engine")
+
+  dokkaHtmlPlugin("org.jetbrains.dokka:kotlin-as-java-plugin:1.4.10")
+
+  sampleImplementation(sourceSets.main.runtimeClasspath)
+}
+
+tasks.compileGroovy.enabled = false
+
+tasks.withType(JavaCompile) {
+  options.compilerArgs += [
+      '-Xlint:all'
+  ]
+}
 
 test {
   useJUnitPlatform {
     includeEngines "junit-vintage", "junit-jupiter"
   }
-}
-
-dependencies {
-  api "com.netflix.spinnaker.kork:kork-plugins-api"
-
-  compileOnly("org.projectlombok:lombok")
-  annotationProcessor("org.projectlombok:lombok")
 }

@@ -30,6 +30,10 @@ import com.github.tomakehurst.wiremock.client.WireMock.urlPathEqualTo
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration.options
 import com.netflix.spinnaker.orca.kayenta.config.KayentaConfiguration
 import com.netflix.spinnaker.time.fixedClock
+import java.time.Duration
+import java.time.Instant
+import java.time.temporal.ChronoUnit.HOURS
+import java.util.UUID.randomUUID
 import org.assertj.core.api.Assertions.assertThat
 import org.jetbrains.spek.api.Spek
 import org.jetbrains.spek.api.dsl.describe
@@ -41,10 +45,6 @@ import retrofit.Endpoints.newFixedEndpoint
 import retrofit.RequestInterceptor
 import retrofit.RestAdapter.LogLevel
 import retrofit.client.OkClient
-import java.time.Duration
-import java.time.Instant
-import java.time.temporal.ChronoUnit.HOURS
-import java.util.UUID.randomUUID
 
 object KayentaServiceTest : Spek({
 
@@ -94,20 +94,22 @@ object KayentaServiceTest : Spek({
           configurationAccountName = null,
           storageAccountName = null,
           canaryExecutionRequest = CanaryExecutionRequest(
-            scopes = mapOf("canary" to CanaryScopes(
-              CanaryScope(
-                scope = "covfefe-control",
-                location = "us-west-2",
-                start = startTime,
-                end = endTime
-              ),
-              CanaryScope(
-                scope = "covfefe-experiment",
-                location = "us-west-2",
-                start = startTime,
-                end = endTime
+            scopes = mapOf(
+              "canary" to CanaryScopes(
+                CanaryScope(
+                  scope = "covfefe-control",
+                  location = "us-west-2",
+                  start = startTime,
+                  end = endTime
+                ),
+                CanaryScope(
+                  scope = "covfefe-experiment",
+                  location = "us-west-2",
+                  start = startTime,
+                  end = endTime
+                )
               )
-            )),
+            ),
             thresholds = Thresholds(pass = 50, marginal = 75)
           )
         )
@@ -136,7 +138,8 @@ object KayentaServiceTest : Spek({
         val canaryId = "666fa25b-b0c6-421b-b84f-f93826932994"
         val storageAccountName = "my-google-account"
 
-        val responseJson = """
+        val responseJson =
+          """
 {
   "application": "myapp",
   "parentPipelineExecutionId": "9cf4ec2e-29fb-4968-ae60-9182b575b30a",
@@ -441,7 +444,8 @@ object KayentaServiceTest : Spek({
         val canaryId = "02a95d21-290c-49f9-8be1-fb0b7779a73a"
         val storageAccountName = "my-google-account"
 
-        val responseJson = """
+        val responseJson =
+          """
 {
   "application": "myapp",
   "parentPipelineExecutionId": "88086da2-3e5a-4a9e-ada7-089ab70a9578",
