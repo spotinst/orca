@@ -28,7 +28,7 @@ allprojects {
   group = "io.spinnaker.orca"
 
   tasks.withType(JavaExec) {
-    if (true) {
+    if (System.getProperty('DEBUG', 'false') == 'true') {
       jvmArgs '-agentlib:jdwp=transport=dt_socket,server=y,suspend=n,address=8183'
     }
   }
