@@ -35,5 +35,6 @@ class UpdateElastigroupStage implements StageDefinitionBuilder {
         .withTask("updateElastigroupTask", UpdateElastigroupTask)
         .withTask("monitorUpdateElastigroup", MonitorKatoTask)
         .withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask)
+    sleep(5000);
   }
 }
