@@ -19,6 +19,7 @@ package com.netflix.spinnaker.orca.clouddriver.pipeline.providers.spot
 import com.netflix.spinnaker.orca.api.pipeline.graph.StageDefinitionBuilder
 import com.netflix.spinnaker.orca.api.pipeline.graph.TaskNode
 import com.netflix.spinnaker.orca.api.pipeline.models.StageExecution
+import com.netflix.spinnaker.orca.clouddriver.ForceCacheRefreshAware
 import com.netflix.spinnaker.orca.clouddriver.tasks.MonitorKatoTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.providers.spot.UpdateElastigroupTask
 import com.netflix.spinnaker.orca.clouddriver.tasks.servergroup.ServerGroupCacheForceRefreshTask
@@ -27,13 +28,12 @@ import groovy.transform.CompileStatic
 import org.springframework.stereotype.Component
 
 @Component
-@CompileStatic
 class UpdateElastigroupStage implements StageDefinitionBuilder {
   @Override
   void taskGraph(StageExecution stage, TaskNode.Builder builder) {
     builder
         .withTask("updateElastigroupTask", UpdateElastigroupTask)
         .withTask("monitorUpdateElastigroup", MonitorKatoTask)
-      //  .withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask)
+        .withTask("forceCacheRefresh", ServerGroupCacheForceRefreshTask)
   }
 }
