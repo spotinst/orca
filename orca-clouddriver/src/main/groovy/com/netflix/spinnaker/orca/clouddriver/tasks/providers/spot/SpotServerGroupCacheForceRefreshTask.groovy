@@ -48,8 +48,8 @@ class SpotServerGroupCacheForceRefreshTask extends AbstractCloudProviderAwareTas
 
   private final Id cacheForceRefreshTaskId
 
-  long backoffPeriod = TimeUnit.SECONDS.toMillis(25)
-  long timeout = TimeUnit.MINUTES.toMillis(35)
+  long backoffPeriod = TimeUnit.SECONDS.toMillis(30)
+  long timeout = TimeUnit.MINUTES.toMillis(40)
 
   long autoSucceedAfterMs = TimeUnit.MINUTES.toMillis(12)
 
